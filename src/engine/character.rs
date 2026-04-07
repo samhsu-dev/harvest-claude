@@ -318,7 +318,7 @@ impl Character {
                 } else if let Some(tool) = &self.tool_name {
                     Self::anim_for_tool(tool)
                 } else {
-                    self.work_anim.unwrap_or(AnimType::Type)
+                    self.work_anim.unwrap_or(AnimType::Farm)
                 };
                 (self.direction, anim, self.anim_frame % 2)
             }
@@ -327,20 +327,20 @@ impl Character {
 
     /// Map a tool name to the corresponding farm animation.
     ///
-    /// Write/Edit → Farm (planting), Read/Grep/Glob → Read,
-    /// Bash → Harvest (gathering output), default → Type.
+    /// Write/Edit → Farm (planting/tending), Read/Grep/Glob/Bash → Harvest
+    /// (gathering), default → Farm (general work).
     pub fn anim_for_tool(tool_name: &str) -> AnimType {
         match tool_name {
             "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => AnimType::Farm,
-            "Read" | "Grep" | "Glob" | "WebFetch" | "WebSearch" => AnimType::Read,
-            "Bash" | "Execute" | "Terminal" => AnimType::Harvest,
-            _ => AnimType::Type,
+            "Read" | "Grep" | "Glob" | "WebFetch" | "WebSearch" | "Bash" | "Execute"
+            | "Terminal" => AnimType::Harvest,
+            _ => AnimType::Farm,
         }
     }
 
-    /// True if the tool name indicates a reading action.
+    /// True if the tool name indicates a reading/gathering action.
     pub fn is_reading_tool(tool_name: &str) -> bool {
-        matches!(Self::anim_for_tool(tool_name), AnimType::Read)
+        matches!(Self::anim_for_tool(tool_name), AnimType::Harvest)
     }
 
     /// Current tile position derived from pixel coordinates.
@@ -552,14 +552,16 @@ mod tests {
     }
 
     #[test]
-    fn is_reading_tool_matches() {
-        assert!(Character::is_reading_tool("Read"));
-        assert!(Character::is_reading_tool("Grep"));
-        assert!(Character::is_reading_tool("Glob"));
-        assert!(Character::is_reading_tool("WebFetch"));
-        assert!(Character::is_reading_tool("WebSearch"));
-        assert!(!Character::is_reading_tool("Write"));
-        assert!(!Character::is_reading_tool("Bash"));
+    fn anim_for_tool_mapping() {
+        // Write/Edit → Farm
+        assert_eq!(Character::anim_for_tool("Write"), AnimType::Farm);
+        assert_eq!(Character::anim_for_tool("Edit"), AnimType::Farm);
+        // Read/Grep/Bash → Harvest
+        assert_eq!(Character::anim_for_tool("Read"), AnimType::Harvest);
+        assert_eq!(Character::anim_for_tool("Grep"), AnimType::Harvest);
+        assert_eq!(Character::anim_for_tool("Bash"), AnimType::Harvest);
+        // Unknown → Farm (default)
+        assert_eq!(Character::anim_for_tool("Agent"), AnimType::Farm);
     }
 
     #[test]
