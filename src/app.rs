@@ -2,7 +2,8 @@ use std::collections::VecDeque;
 
 use color_eyre::eyre::{Result, WrapErr};
 use crossterm::event::{KeyCode, MouseEventKind};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Position};
+use ratatui::style::{Color, Style};
 
 use crate::action::Action;
 use crate::cli::Args;
@@ -18,7 +19,8 @@ use crate::render::composer::{
 use crate::tui::TerminalGuard;
 use crate::types::{AgentEvent, AgentStatus, CompanionKind};
 use crate::ui::input;
-use crate::ui::status_bar::{SelectedInfo, StatusBar};
+use crate::ui::status_bar::{AgentSummary, SelectedInfo, StatusBar};
+use crate::watcher::focus;
 use crate::watcher::registry::AgentRegistry;
 use crate::watcher::scanner::{DirectoryScanner, ScanEvent};
 use crate::watcher::timer::{TimerEvent, TimerManager};
@@ -122,7 +124,8 @@ impl App {
                 project,
                 session_id,
             } => {
-                if self.office.characters.len() < MAX_AGENTS
+                if !self.agents.has_path(&path)
+                    && self.office.characters.len() < MAX_AGENTS
                     && let Ok(id) = self.agents.add_agent(session_id, path, project)
                 {
                     let (palette, hue_shift) = self.agents.assign_palette();
@@ -179,11 +182,51 @@ impl App {
                     project_name,
                     session_id,
                 } => {
+                    // Check if this is a dormant agent waking up.
+                    let dormant_id = self
+                        .agents
+                        .agents()
+                        .iter()
+                        .find(|a| a.jsonl_path == path && a.status == AgentStatus::Dormant)
+                        .map(|a| a.id);
+                    if let Some(id) = dormant_id {
+                        // Wake up: restore agent and character
+                        if let Some(agent) = self.agents.get_mut(id) {
+                            agent.status = AgentStatus::Idle;
+                        }
+                        if let Some(ch) = self.office.character_by_agent_mut(id) {
+                            ch.wake_from_dormant();
+                        }
+                        continue;
+                    }
+                    // Skip if already registered (e.g. sub-agent tracked by parent)
+                    if self.agents.has_path(&path) {
+                        continue;
+                    }
                     if self.office.characters.len() < MAX_AGENTS
                         && let Ok(id) = self.agents.add_agent(session_id, path, project_name)
                     {
                         let (palette, hue_shift) = self.agents.assign_palette();
                         self.office.add_character(id, palette, hue_shift);
+                    }
+                }
+                ScanEvent::SessionDormant { path } => {
+                    let id = self
+                        .agents
+                        .agents()
+                        .iter()
+                        .find(|a| a.jsonl_path == path)
+                        .map(|a| a.id);
+                    if let Some(id) = id {
+                        if let Some(agent) = self.agents.get_mut(id) {
+                            agent.status = AgentStatus::Dormant;
+                        }
+                        self.timers.cancel_all(id);
+                        // Walk character to HOME then hide
+                        self.start_dormant_walk(id);
+                        if self.selected == Some(id) {
+                            self.selected = None;
+                        }
                     }
                 }
                 ScanEvent::SessionGone { path } => {
@@ -197,6 +240,9 @@ impl App {
                         self.office.remove_character(id);
                         self.agents.remove_agent(id);
                         self.timers.cancel_all(id);
+                        if self.selected == Some(id) {
+                            self.selected = None;
+                        }
                     }
                 }
             }
@@ -300,12 +346,25 @@ impl App {
                     ch.add_companion(tool_id.clone(), kind);
                 }
             }
-            AgentEvent::SubAgentSpawn { .. } => {}
+            AgentEvent::SubAgentSpawn { ref parent_tool_id } => {
+                // Sub-agents appear as companion animals on the parent character
+                let kind = pick_companion_kind(agent_id, parent_tool_id);
+                if let Some(ch) = self.office.character_by_agent_mut(agent_id) {
+                    ch.add_companion(parent_tool_id.clone(), kind);
+                }
+            }
             AgentEvent::SubAgentToolStart { .. } => {
                 // Short-term sub-agent activity: activate nearby crop plots
                 self.activate_nearby_crops(agent_id);
             }
-            AgentEvent::SubAgentToolDone { .. } => {}
+            AgentEvent::SubAgentToolDone {
+                ref parent_tool_id, ..
+            } => {
+                // Remove companion when sub-agent tool finishes
+                if let Some(ch) = self.office.character_by_agent_mut(agent_id) {
+                    ch.remove_companion(parent_tool_id);
+                }
+            }
         }
     }
 
@@ -381,8 +440,33 @@ impl App {
             return;
         }
 
+        // Clicking an already-selected character: focus its terminal window
+        if self.selected == Some(agent_id) {
+            if let Some(agent) = self.agents.get(agent_id) {
+                focus::focus_agent_window(&agent.jsonl_path);
+            }
+            return;
+        }
+
         // Select the clicked character
         self.selected = Some(agent_id);
+    }
+
+    /// Walk a character to the nearest HOME furniture, then set dormant on arrival.
+    fn start_dormant_walk(&mut self, agent_id: usize) {
+        let from = match self.office.character_by_agent(agent_id) {
+            Some(ch) => ch.current_tile(),
+            None => return,
+        };
+
+        let home_tile = self.office.find_near_furniture(from, "HOME");
+        let path = home_tile
+            .and_then(|ht| pathfind::bfs(&self.office.walkable, from, ht, None))
+            .unwrap_or_default();
+
+        if let Some(ch) = self.office.character_by_agent_mut(agent_id) {
+            ch.start_dormant_walk(VecDeque::from(path));
+        }
     }
 
     /// Activate nearby crop plots when a sub-agent tool runs (growth effect).
@@ -443,6 +527,7 @@ impl App {
                     .office
                     .characters
                     .iter()
+                    .filter(|ch| !ch.is_dormant)
                     .map(|ch| {
                         let (direction, anim_type, frame) = ch.sprite_key();
                         CharacterRender {
@@ -501,12 +586,61 @@ impl App {
                 composer::compose_scene(&mut pixel_buf, &scene);
                 frame.render_widget(&pixel_buf, main_area);
 
+                // Name labels above each character (rendered as text overlay)
+                let term_buf = frame.buffer_mut();
+                for ch in self.office.characters.iter().filter(|c| !c.is_dormant) {
+                    let agent = self.agents.agents().iter().find(|a| a.id == ch.agent_id);
+                    let project_name = agent.map(|a| a.project_name.as_str()).unwrap_or("agent");
+                    let label = short_label(project_name);
+
+                    // Character pixel position → terminal cell position
+                    // Each terminal cell = 1px wide, 2px tall (half-block)
+                    let char_px_x = ch.pos.0 as i16;
+                    let char_px_y = ch.pos.1 as i16;
+
+                    // Label positioned above the character, centered
+                    let label_len = label.len() as i16;
+                    let label_x = main_area.x as i16 + char_px_x + 4 - label_len / 2;
+                    let label_y = main_area.y as i16 + (char_px_y - 4) / 2; // -4px above head
+
+                    if label_y < main_area.y as i16
+                        || label_y >= (main_area.y + main_area.height) as i16
+                    {
+                        continue;
+                    }
+
+                    let (pr, pg, pb) = palette_color(ch.palette);
+                    let style = Style::default().fg(Color::Rgb(pr, pg, pb));
+
+                    for (i, ch_byte) in label.bytes().enumerate() {
+                        let x = label_x + i as i16;
+                        if x < main_area.x as i16 || x >= (main_area.x + main_area.width) as i16 {
+                            continue;
+                        }
+                        if let Some(cell) =
+                            term_buf.cell_mut(Position::new(x as u16, label_y as u16))
+                        {
+                            cell.set_symbol(&String::from(ch_byte as char));
+                            cell.set_style(style);
+                        }
+                    }
+                }
+
                 // Status bar
-                let palette_dots: Vec<(u8, u8, u8)> = self
+                let agent_summaries: Vec<AgentSummary> = self
                     .office
                     .characters
                     .iter()
-                    .map(|ch| palette_color(ch.palette))
+                    .filter(|ch| !ch.is_dormant)
+                    .map(|ch| {
+                        let agent = self.agents.agents().iter().find(|a| a.id == ch.agent_id);
+                        AgentSummary {
+                            color: palette_color(ch.palette),
+                            project_name: agent.map(|a| a.project_name.clone()).unwrap_or_default(),
+                            status: agent.map(|a| a.status).unwrap_or(AgentStatus::Idle),
+                            tool_name: ch.tool_name.clone(),
+                        }
+                    })
                     .collect();
 
                 let selected_info = self.selected.and_then(|id| {
@@ -521,8 +655,7 @@ impl App {
                 });
 
                 let status = StatusBar {
-                    agent_count: self.office.characters.len(),
-                    palette_dots,
+                    agents: agent_summaries,
                     selected_info,
                 };
 
@@ -558,14 +691,38 @@ fn parse_tile_key(key: &str) -> Option<(u16, u16)> {
     Some((col, row))
 }
 
+/// Extract a short display label from a project name/hash.
+///
+/// Converts `-Users-foo-Projects-bar` → `bar`, or truncates to 8 chars.
+fn short_label(project_name: &str) -> String {
+    // Project names are often hashes like "-Users-foo-Projects-bar"
+    // Extract the last meaningful segment
+    let cleaned = project_name.trim_start_matches('-');
+    let segments: Vec<&str> = cleaned.split('-').collect();
+
+    // Find the segment after "Projects" if it exists
+    let label = segments
+        .iter()
+        .position(|&s| s.eq_ignore_ascii_case("Projects"))
+        .and_then(|idx| segments.get(idx + 1))
+        .copied()
+        .unwrap_or_else(|| segments.last().copied().unwrap_or("agent"));
+
+    if label.len() > 8 {
+        format!("{}…", &label[..7])
+    } else {
+        label.to_owned()
+    }
+}
+
 fn palette_color(palette: u8) -> (u8, u8, u8) {
     match palette {
-        0 => (70, 130, 180),
-        1 => (178, 102, 76),
-        2 => (106, 168, 79),
-        3 => (180, 95, 160),
-        4 => (200, 160, 60),
-        5 => (100, 180, 180),
+        0 => (60, 100, 220),  // blue
+        1 => (200, 50, 50),   // red
+        2 => (222, 238, 214), // white/light
+        3 => (140, 50, 200),  // purple
+        4 => (230, 140, 30),  // orange
+        5 => (30, 180, 180),  // teal
         _ => (180, 180, 180),
     }
 }
