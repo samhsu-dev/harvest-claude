@@ -8,7 +8,7 @@ use crate::constants::{DEFAULT_COLS, DEFAULT_ROWS};
 use crate::types::{OfficeLayout, PlacedFurniture, TileColor, TileType};
 
 /// Current bundled layout revision. Layouts with a lower revision are replaced.
-const BUNDLED_REVISION: u32 = 10;
+const BUNDLED_REVISION: u32 = 11;
 
 /// Layout filename within the config directory.
 const LAYOUT_FILENAME: &str = "layout.json";
@@ -144,12 +144,16 @@ pub fn default_layout() -> OfficeLayout {
             set(&mut tiles, c, r, TileType::DirtDark);
         }
     }
-    // L-shaped path: home exit east, then south into meadow
+    // Path: home exit east, south through farm, branch to pond
     for c in 5..=10 {
         set(&mut tiles, c, 3, TileType::Stone);
     }
-    for r in 4..=7 {
+    for r in 4..=11 {
         set(&mut tiles, 10, r, TileType::Stone);
+    }
+    // Short branch east toward pond
+    for c in 11..=14 {
+        set(&mut tiles, c, 10, TileType::Stone);
     }
 
     // --- Animal pen (bottom-left, spacious) ---
@@ -288,8 +292,9 @@ pub fn default_layout() -> OfficeLayout {
         PlacedFurniture::new("fish-2", "FISHING_SPOT", 21, 14),
         // === Lanterns (along path and near buildings) ===
         PlacedFurniture::new("lamp-1", "LANTERN", 7, 3), // home path
-        PlacedFurniture::new("lamp-2", "LANTERN", 10, 5), // path corner
-        PlacedFurniture::new("lamp-3", "LANTERN", 4, 12), // animal pen
+        PlacedFurniture::new("lamp-2", "LANTERN", 10, 6), // mid spine
+        PlacedFurniture::new("lamp-3", "LANTERN", 10, 10), // pond junction
+        PlacedFurniture::new("lamp-4", "LANTERN", 4, 12), // animal pen
     ];
 
     // Generate tile colors for floor tiles.
