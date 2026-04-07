@@ -8,7 +8,7 @@ use crate::constants::{DEFAULT_COLS, DEFAULT_ROWS};
 use crate::types::{OfficeLayout, PlacedFurniture, TileColor, TileType};
 
 /// Current bundled layout revision. Layouts with a lower revision are replaced.
-const BUNDLED_REVISION: u32 = 9;
+const BUNDLED_REVISION: u32 = 10;
 
 /// Layout filename within the pixel-agents directory.
 const LAYOUT_FILENAME: &str = "layout.json";
@@ -120,7 +120,7 @@ pub fn default_layout() -> OfficeLayout {
     let dark: &[(u16, u16)] = &[
         (4, 4),
         (8, 6),
-        (10, 3),
+        (18, 3),
         (14, 7),
         (16, 2),
         (11, 9),
@@ -144,9 +144,13 @@ pub fn default_layout() -> OfficeLayout {
             set(&mut tiles, c, r, TileType::DirtDark);
         }
     }
-    // Tiny stone doorstep — the only path on the farm
-    set(&mut tiles, 5, 3, TileType::Stone);
-    set(&mut tiles, 6, 3, TileType::Stone);
+    // L-shaped path: home exit east, then south into meadow
+    for c in 5..=10 {
+        set(&mut tiles, c, 3, TileType::Stone);
+    }
+    for r in 4..=7 {
+        set(&mut tiles, 10, r, TileType::Stone);
+    }
 
     // --- Animal pen (bottom-left, spacious) ---
     for r in 11..=14 {
@@ -282,10 +286,10 @@ pub fn default_layout() -> OfficeLayout {
         // === Fishing spots ===
         PlacedFurniture::new("fish-1", "FISHING_SPOT", 19, 12),
         PlacedFurniture::new("fish-2", "FISHING_SPOT", 21, 14),
-        // === Lanterns (sparse, at key spots) ===
-        PlacedFurniture::new("lamp-1", "LANTERN", 5, 4),
-        PlacedFurniture::new("lamp-2", "LANTERN", 10, 7),
-        PlacedFurniture::new("lamp-3", "LANTERN", 19, 11),
+        // === Lanterns (along path and near buildings) ===
+        PlacedFurniture::new("lamp-1", "LANTERN", 7, 3), // home path
+        PlacedFurniture::new("lamp-2", "LANTERN", 10, 5), // path corner
+        PlacedFurniture::new("lamp-3", "LANTERN", 4, 12), // animal pen
     ];
 
     // Generate tile colors for floor tiles.
