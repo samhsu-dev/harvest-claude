@@ -1,0 +1,34 @@
+# ===== Rust =====
+
+# Cargo build output
+target/
+
+# Cargo.lock for libraries (keep for binaries)
+# Cargo.lock
+
+# Rustfmt backup
+*.rs.bk
+
+# ===== IDE & Editor =====
+
+.vscode/
+.idea/
+*.iml
+*.sublime-workspace
+*.sublime-project
+*.swp
+*.swo
+*~
+\#*\#
+.\#*
+
+# ===== OS =====
+
+.DS_Store
+._*
+Thumbs.db
+
+# ===== Project =====
+
+.pixel-agent
+*.log
