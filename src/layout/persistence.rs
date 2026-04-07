@@ -8,7 +8,7 @@ use crate::constants::{DEFAULT_COLS, DEFAULT_ROWS};
 use crate::types::{OfficeLayout, PlacedFurniture, TileColor, TileType};
 
 /// Current bundled layout revision. Layouts with a lower revision are replaced.
-const BUNDLED_REVISION: u32 = 2;
+const BUNDLED_REVISION: u32 = 5;
 
 /// Layout filename within the pixel-agents directory.
 const LAYOUT_FILENAME: &str = "layout.json";
@@ -88,21 +88,20 @@ pub fn load_or_default() -> Result<OfficeLayout> {
     Ok(default_layout())
 }
 
-/// Bundled default farm layout: 28x16 grid with grass, dirt paths, a pond,
-/// crop fields, and stumps so the app has content on first launch.
+/// Bundled default farm layout: 28x16 grid — classic Harvest Moon arrangement
+/// with farmhouse, barn, crop field, orchard, pond, and meadow.
 pub fn default_layout() -> OfficeLayout {
     let cols = DEFAULT_COLS;
     let rows = DEFAULT_ROWS;
     let total = (cols as usize) * (rows as usize);
     let mut tiles = vec![TileType::Grass as u8; total];
 
-    // Helper to set a tile by (col, row).
     let set = |tiles: &mut Vec<u8>, c: u16, r: u16, tt: TileType| {
         let idx = (r as usize) * (cols as usize) + (c as usize);
         tiles[idx] = tt as u8;
     };
 
-    // Border: row 0, row 15, col 0, col 27 are Fence.
+    // Border fence
     for c in 0..cols {
         set(&mut tiles, c, 0, TileType::Fence);
         set(&mut tiles, c, rows - 1, TileType::Fence);
@@ -112,61 +111,93 @@ pub fn default_layout() -> OfficeLayout {
         set(&mut tiles, cols - 1, r, TileType::Fence);
     }
 
-    // GrassDark patches for variety.
-    let dark_patches: &[(u16, u16)] = &[
-        (3, 8),
-        (4, 8),
-        (5, 9),
-        (8, 12),
-        (9, 12),
-        (9, 13),
+    // GrassDark shade patches — scattered naturally
+    let dark: &[(u16, u16)] = &[
+        (2, 6),
+        (3, 6),
+        (8, 8),
+        (9, 8),
+        (9, 9),
         (15, 9),
-        (16, 10),
-        (10, 7),
-        (11, 7),
-        (6, 13),
-        (7, 13),
-        (12, 11),
+        (16, 9),
+        (10, 12),
+        (11, 12),
+        (4, 13),
+        (5, 13),
+        (17, 11),
+        (18, 12),
+        (7, 3),
+        (8, 3),
+        (14, 13),
+        (15, 13),
+        (22, 8),
+        (23, 8),
     ];
-    for &(c, r) in dark_patches {
+    for &(c, r) in dark {
         set(&mut tiles, c, r, TileType::GrassDark);
     }
 
-    // Stone path from entrance (bottom, col 14) up through the farm.
-    for r in 1..15 {
-        set(&mut tiles, 14, r, TileType::Stone);
-    }
-    // Widen the path slightly near the entrance.
-    for r in 12..15 {
-        set(&mut tiles, 13, r, TileType::Stone);
-    }
-    // Branch path toward crop field (right).
-    for c in 15..18 {
-        set(&mut tiles, c, 6, TileType::Stone);
-    }
-    // Branch path toward cabin (left).
-    for c in 7..14 {
-        set(&mut tiles, c, 4, TileType::Stone);
+    // --- Home area (top-left, small dirt pad) ---
+    for r in 1..=3 {
+        for c in 4..=6 {
+            set(&mut tiles, c, r, TileType::DirtDark);
+        }
     }
 
-    // Crop field (top-right, cols 18-25, rows 2-6): Dirt tiles.
-    for r in 2..=6 {
-        for c in 18..=25 {
+    // --- Animal pen area (bottom-left) ---
+    for r in 11..=12 {
+        for c in 3..=6 {
+            set(&mut tiles, c, r, TileType::DirtDark);
+        }
+    }
+
+    // --- Crop field (right, cols 18-26, rows 1-6) ---
+    for r in 1..=6 {
+        for c in 18..=26 {
             set(&mut tiles, c, r, TileType::Dirt);
         }
     }
-    // Darker dirt rows for tilled soil.
-    for c in 18..=25 {
-        set(&mut tiles, c, 3, TileType::DirtDark);
-        set(&mut tiles, c, 5, TileType::DirtDark);
+    // Darker furrows every other row
+    for c in 18..=26 {
+        set(&mut tiles, c, 2, TileType::DirtDark);
+        set(&mut tiles, c, 4, TileType::DirtDark);
+        set(&mut tiles, c, 6, TileType::DirtDark);
     }
 
-    // Pond (bottom-right, cols 20-25, rows 11-14): Water tiles, irregular.
+    // --- Dirt paths (warm packed earth) ---
+    // Main N-S path from house to bottom
+    for r in 5..15 {
+        set(&mut tiles, 10, r, TileType::Stone);
+    }
+    // House exit path
+    for c in 8..=10 {
+        set(&mut tiles, c, 5, TileType::Stone);
+    }
+    // E-W path to crop field
+    for c in 11..=17 {
+        set(&mut tiles, c, 7, TileType::Stone);
+    }
+    // E-W path to barn
+    for c in 7..=10 {
+        set(&mut tiles, c, 11, TileType::Stone);
+    }
+    // Path to pond
+    for c in 11..=18 {
+        set(&mut tiles, c, 11, TileType::Stone);
+    }
+
+    // --- Pond (bottom-right, cols 20-26, rows 10-14) ---
     let pond: &[(u16, u16)] = &[
+        (21, 10),
+        (22, 10),
+        (23, 10),
+        (24, 10),
+        (20, 11),
         (21, 11),
         (22, 11),
         (23, 11),
         (24, 11),
+        (25, 11),
         (20, 12),
         (21, 12),
         (22, 12),
@@ -187,10 +218,12 @@ pub fn default_layout() -> OfficeLayout {
     for &(c, r) in pond {
         set(&mut tiles, c, r, TileType::Water);
     }
-    // Sandy shore around the pond.
     let sand: &[(u16, u16)] = &[
-        (20, 11),
-        (25, 11),
+        (20, 10),
+        (25, 10),
+        (26, 10),
+        (19, 11),
+        (26, 11),
         (19, 12),
         (26, 12),
         (19, 13),
@@ -202,63 +235,80 @@ pub fn default_layout() -> OfficeLayout {
         set(&mut tiles, c, r, TileType::Sand);
     }
 
-    // Cabin area (top-left, cols 2-6, rows 2-5): Dirt floor inside cabin.
-    for r in 2..=5 {
-        for c in 2..=6 {
-            set(&mut tiles, c, r, TileType::Dirt);
-        }
-    }
-
-    // Furniture placement.
+    // --- Furniture ---
     let furniture = vec![
-        // --- Cabin structure (L-shaped) ---
-        PlacedFurniture::new("cabin-1", "CABIN_WALL", 2, 2),
-        PlacedFurniture::new("cabin-2", "CABIN_WALL", 3, 2),
-        PlacedFurniture::new("cabin-3", "CABIN_WALL", 4, 2),
-        PlacedFurniture::new("cabin-4", "CABIN_WALL", 5, 2),
-        PlacedFurniture::new("cabin-5", "CABIN_WALL", 6, 2),
-        PlacedFurniture::new("cabin-6", "CABIN_WALL", 2, 3),
-        PlacedFurniture::new("cabin-7", "CABIN_WALL", 2, 4),
-        PlacedFurniture::new("cabin-8", "CABIN_WALL", 2, 5),
-        PlacedFurniture::new("cabin-seat", "STUMP_FRONT", 4, 4),
-        // --- Crop field plots ---
-        PlacedFurniture::new("crop-1", "CROP_PLOT", 19, 3),
-        PlacedFurniture::new("crop-2", "CROP_PLOT", 21, 3),
-        PlacedFurniture::new("crop-3", "CROP_PLOT", 23, 3),
-        PlacedFurniture::new("crop-4", "CROP_PLOT", 25, 3),
-        PlacedFurniture::new("crop-5", "CROP_PLOT", 19, 5),
-        PlacedFurniture::new("crop-6", "CROP_PLOT", 21, 5),
-        PlacedFurniture::new("crop-7", "CROP_PLOT", 23, 5),
-        PlacedFurniture::new("crop-8", "CROP_PLOT", 25, 5),
-        // --- Stumps near crop plots (facing up toward crops) ---
-        PlacedFurniture::new("stump-1", "STUMP_BACK", 19, 4),
-        PlacedFurniture::new("stump-2", "STUMP_BACK", 21, 4),
-        PlacedFurniture::new("stump-3", "STUMP_BACK", 23, 4),
-        PlacedFurniture::new("stump-4", "STUMP_BACK", 25, 4),
-        PlacedFurniture::new("stump-5", "STUMP_BACK", 19, 6),
-        PlacedFurniture::new("stump-6", "STUMP_BACK", 21, 6),
-        PlacedFurniture::new("stump-7", "STUMP_BACK", 23, 6),
-        PlacedFurniture::new("stump-8", "STUMP_BACK", 25, 6),
-        // --- Fishing spots at pond edge ---
+        // === Home (compact icon) ===
+        PlacedFurniture::new("home-1", "HOME", 5, 2),
+        // === Animal pens ===
+        PlacedFurniture::new("coop-1", "CHICKEN_COOP", 3, 11),
+        PlacedFurniture::new("coop-2", "CHICKEN_COOP", 4, 11),
+        PlacedFurniture::new("pen-1", "COW_PEN", 5, 12),
+        PlacedFurniture::new("pen-2", "COW_PEN", 6, 12),
+        // === Crop field plots (4x3 grid on rows 1,3,5 x cols 19,21,23,25) ===
+        PlacedFurniture::new("crop-1", "CROP_PLOT", 19, 1),
+        PlacedFurniture::new("crop-2", "CROP_PLOT", 21, 1),
+        PlacedFurniture::new("crop-3", "CROP_PLOT", 23, 1),
+        PlacedFurniture::new("crop-4", "CROP_PLOT", 25, 1),
+        PlacedFurniture::new("crop-5", "CROP_PLOT", 19, 3),
+        PlacedFurniture::new("crop-6", "CROP_PLOT", 21, 3),
+        PlacedFurniture::new("crop-7", "CROP_PLOT", 23, 3),
+        PlacedFurniture::new("crop-8", "CROP_PLOT", 25, 3),
+        PlacedFurniture::new("crop-9", "CROP_PLOT", 19, 5),
+        PlacedFurniture::new("crop-10", "CROP_PLOT", 21, 5),
+        PlacedFurniture::new("crop-11", "CROP_PLOT", 23, 5),
+        PlacedFurniture::new("crop-12", "CROP_PLOT", 25, 5),
+        // === Scarecrows in crop field ===
+        PlacedFurniture::new("scare-1", "SCARECROW", 18, 3),
+        PlacedFurniture::new("scare-2", "SCARECROW", 26, 5),
+        // === Orchard (center-left, organized rows) ===
+        PlacedFurniture::new("tree-1", "TREE_FRUIT", 3, 6),
+        PlacedFurniture::new("tree-2", "TREE", 5, 6),
+        PlacedFurniture::new("tree-3", "TREE_FRUIT", 7, 6),
+        PlacedFurniture::new("tree-4", "TREE", 3, 8),
+        PlacedFurniture::new("tree-5", "TREE_FRUIT", 5, 8),
+        PlacedFurniture::new("tree-6", "TREE", 7, 8),
+        // === Meadow trees (right side and scattered) ===
+        PlacedFurniture::new("tree-7", "TREE", 15, 3),
+        PlacedFurniture::new("tree-8", "TREE_FRUIT", 12, 1),
+        PlacedFurniture::new("tree-9", "TREE", 16, 13),
+        PlacedFurniture::new("tree-10", "TREE", 13, 14),
+        // === Extra trees in freed areas ===
+        PlacedFurniture::new("tree-11", "TREE", 2, 1),
+        PlacedFurniture::new("tree-12", "TREE_FRUIT", 7, 2),
+        PlacedFurniture::new("tree-13", "TREE", 2, 10),
+        PlacedFurniture::new("tree-14", "TREE", 7, 13),
+        // === Flowers and bushes (decoration) ===
+        PlacedFurniture::new("flower-1", "FLOWER", 9, 2),
+        PlacedFurniture::new("flower-2", "FLOWER", 9, 4),
+        PlacedFurniture::new("flower-3", "FLOWER", 12, 9),
+        PlacedFurniture::new("flower-4", "FLOWER", 17, 5),
+        PlacedFurniture::new("flower-5", "FLOWER", 3, 3),
+        PlacedFurniture::new("flower-6", "FLOWER", 7, 10),
+        PlacedFurniture::new("bush-1", "BUSH", 1, 5),
+        PlacedFurniture::new("bush-2", "BUSH", 1, 9),
+        PlacedFurniture::new("bush-3", "BUSH", 8, 14),
+        PlacedFurniture::new("bush-4", "BUSH", 14, 1),
+        // === Seats (STUMP_FRONT) — placed on grass, never on paths ===
+        PlacedFurniture::new("rest-1", "STUMP_FRONT", 6, 4), // near home
+        PlacedFurniture::new("rest-2", "STUMP_FRONT", 3, 4), // near home
+        PlacedFurniture::new("rest-3", "STUMP_FRONT", 17, 2), // crop field edge
+        PlacedFurniture::new("rest-4", "STUMP_FRONT", 19, 9), // near pond
+        PlacedFurniture::new("rest-5", "STUMP_FRONT", 4, 9), // orchard
+        PlacedFurniture::new("rest-6", "STUMP_FRONT", 12, 6), // meadow
+        PlacedFurniture::new("rest-7", "STUMP_FRONT", 15, 10), // near path
+        PlacedFurniture::new("rest-8", "STUMP_FRONT", 3, 14), // south meadow
+        // === Fishing spots ===
         PlacedFurniture::new("fish-1", "FISHING_SPOT", 19, 12),
-        PlacedFurniture::new("fish-2", "FISHING_SPOT", 20, 14),
-        // --- Scarecrow in crop field ---
-        PlacedFurniture::new("scarecrow-1", "SCARECROW", 22, 2),
-        // --- Well in central area ---
-        PlacedFurniture::new("well-1", "WELL", 12, 8),
-        // --- Mailbox near entrance path ---
-        PlacedFurniture::new("mailbox-1", "MAILBOX", 15, 13),
-        // --- Trees scattered around edges ---
-        PlacedFurniture::new("tree-1", "TREE", 2, 8),
-        PlacedFurniture::new("tree-2", "TREE", 8, 2),
-        PlacedFurniture::new("tree-3", "TREE_FRUIT", 10, 2),
-        PlacedFurniture::new("tree-4", "TREE", 2, 12),
-        PlacedFurniture::new("tree-5", "TREE_FRUIT", 5, 12),
-        PlacedFurniture::new("tree-6", "TREE", 17, 2),
-        PlacedFurniture::new("tree-7", "TREE", 8, 10),
-        // --- Lanterns along path ---
-        PlacedFurniture::new("lantern-1", "LANTERN", 13, 9),
-        PlacedFurniture::new("lantern-2", "LANTERN", 15, 4),
+        PlacedFurniture::new("fish-2", "FISHING_SPOT", 21, 14),
+        // === Well ===
+        PlacedFurniture::new("well-1", "WELL", 11, 5),
+        // === Mailbox near house ===
+        PlacedFurniture::new("mail-1", "MAILBOX", 8, 5),
+        // === Lanterns ===
+        PlacedFurniture::new("lamp-1", "LANTERN", 9, 7),
+        PlacedFurniture::new("lamp-2", "LANTERN", 11, 11),
+        PlacedFurniture::new("lamp-3", "LANTERN", 9, 14),
+        PlacedFurniture::new("lamp-4", "LANTERN", 17, 7),
     ];
 
     // Generate tile colors for floor tiles.
@@ -392,11 +442,11 @@ fn default_tile_color(tt: TileType) -> TileColor {
             s: 0.35,
             b: 0.75,
         },
-        // Grey stone path
+        // Warm tan cobblestone path
         TileType::Stone => TileColor {
-            h: 0.0,
-            s: 0.05,
-            b: 0.65,
+            h: 42.0,
+            s: 0.40,
+            b: 0.70,
         },
         // Remaining floor types: neutral grey
         _ => TileColor {

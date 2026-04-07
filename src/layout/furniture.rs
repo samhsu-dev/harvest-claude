@@ -40,13 +40,17 @@ pub fn furniture_footprint(kind: &str) -> Vec<(i16, i16)> {
         "FISHING_SPOT" => vec![(0, 0)],
         // Trees: 1x1 footprint (sprite extends above)
         "TREE" | "TREE_FRUIT" => vec![(0, 0)],
-        // Cabin wall segments: 1x1
-        "CABIN_WALL" => vec![(0, 0)],
+        // Wall segments: 1x1
+        "CABIN_WALL" | "BARN_WALL" => vec![(0, 0)],
+        // Home: 1x1
+        "HOME" => vec![(0, 0)],
+        // Animal pens: 1x1
+        "CHICKEN_COOP" | "COW_PEN" => vec![(0, 0)],
         // Structures
         "WELL" => vec![(0, 0)],
         "MAILBOX" | "MAILBOX_ON" => vec![(0, 0)],
         "SCARECROW" => vec![(0, 0)],
-        "LANTERN" => vec![(0, 0)],
+        "LANTERN" | "FLOWER" | "BUSH" => vec![(0, 0)],
         "FENCE_H" | "FENCE_V" => vec![(0, 0)],
         // Unknown
         _ => vec![(0, 0)],
@@ -94,8 +98,11 @@ pub(crate) fn furniture_category(kind: &str) -> Option<String> {
             Some("seating".to_owned())
         }
         "MAILBOX" | "MAILBOX_ON" => Some("electronics".to_owned()),
-        "TREE" | "TREE_FRUIT" | "WELL" | "SCARECROW" | "LANTERN" | "CABIN_WALL" | "FENCE_H"
-        | "FENCE_V" => Some("decor".to_owned()),
+        "TREE" | "TREE_FRUIT" | "WELL" | "SCARECROW" | "LANTERN" | "CABIN_WALL" | "BARN_WALL"
+        | "FENCE_H" | "FENCE_V" | "FLOWER" | "BUSH" | "CHICKEN_COOP" | "COW_PEN" => {
+            Some("decor".to_owned())
+        }
+        "HOME" => Some("building".to_owned()),
         _ => None,
     }
 }

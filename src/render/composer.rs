@@ -96,12 +96,11 @@ pub fn render_tiles(
                     let sprite = apply_tile_color(sprite, (col, row), tile_colors);
                     buf.blit(&sprite, px, py);
                 }
-                floor_tile if floor_tile.is_floor() => {
-                    let sprite = floor_sprite(floor_tile);
+                other => {
+                    let sprite = floor_sprite(other);
                     let sprite = apply_tile_color(sprite, (col, row), tile_colors);
                     buf.blit(&sprite, px, py);
                 }
-                _ => {}
             }
         }
     }
@@ -190,7 +189,7 @@ pub(crate) fn collect_drawables(
         for comp in &ch.companions {
             let comp_sprite = companion_sprite(comp.kind, comp.frame);
             let comp_x = px + comp.offset_x as i16;
-            let comp_y = py + 8 + comp.offset_y as i16; // below character's head
+            let comp_y = py + comp.offset_y as i16; // beside character
             drawables.push(Drawable {
                 sprite: comp_sprite,
                 x: comp_x,
@@ -204,7 +203,7 @@ pub(crate) fn collect_drawables(
         if let Some(ref bubble) = ch.bubble {
             let bubble_sprite = status_bubble(bubble.kind);
             let bubble_x = px - 4; // center 16-wide bubble over 8-wide character
-            let bubble_y = py - 8;
+            let bubble_y = py - 6;
             drawables.push(Drawable {
                 sprite: bubble_sprite,
                 x: bubble_x,
