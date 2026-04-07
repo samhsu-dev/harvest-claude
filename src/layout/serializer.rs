@@ -146,9 +146,9 @@ mod tests {
     fn tile_map_walls_on_border() {
         let layout = default_layout();
         let map = build_tile_map(&layout);
-        assert_eq!(map[0][0], TileType::Wall);
-        assert_eq!(map[0][19], TileType::Wall);
-        assert_eq!(map[10][0], TileType::Wall);
+        assert_eq!(map[0][0], TileType::Fence);
+        assert_eq!(map[0][19], TileType::Fence);
+        assert_eq!(map[10][0], TileType::Fence);
     }
 
     #[test]
@@ -167,7 +167,7 @@ mod tests {
         // Desks occupy 2 tiles each (2 desks = 4), chairs 1 each (2), bookshelf 2 = 8 total
         // Plant is not surface but is 1x1 = 1 => 9 total
         for inst in &instances {
-            if inst.furniture_type == "MONITOR" || inst.furniture_type == "LAPTOP" {
+            if inst.furniture_type == "LANTERN" || inst.furniture_type == "SCARECROW" {
                 for pos in &inst.footprint {
                     // Surface items might share position with desks (which ARE blocked),
                     // so we just verify the surface item logic runs without panic
@@ -193,13 +193,12 @@ mod tests {
     }
 
     #[test]
-    fn desk_z_map_contains_desk_tiles() {
+    fn desk_z_map_contains_crop_tiles() {
         let layout = default_layout();
         let instances = build_furniture(&layout);
         let desk_z = build_desk_z_map(&instances);
-        // desk-1 at (3,3) occupies (3,3) and (4,3)
-        assert!(desk_z.contains_key(&(3, 3)));
-        assert!(desk_z.contains_key(&(4, 3)));
+        // crop-1 at (19,3) is a 1x1 crop plot
+        assert!(desk_z.contains_key(&(19, 3)));
     }
 
     #[test]
@@ -213,7 +212,7 @@ mod tests {
 
     #[test]
     fn build_walkable_excludes_blocked() {
-        let tile_map = vec![vec![TileType::Floor1; 5]; 5];
+        let tile_map = vec![vec![TileType::Grass; 5]; 5];
         let mut blocked = std::collections::HashSet::new();
         blocked.insert((2u16, 2u16));
         blocked.insert((3, 3));
@@ -226,12 +225,12 @@ mod tests {
 
     #[test]
     fn build_walkable_excludes_void_and_wall() {
-        let tile_map = vec![vec![TileType::Void, TileType::Wall, TileType::Floor1]];
+        let tile_map = vec![vec![TileType::Void, TileType::Fence, TileType::Grass]];
         let blocked = std::collections::HashSet::new();
         let walkable = build_walkable(&tile_map, &blocked);
         assert!(!walkable.contains(&(0, 0)), "Void should not be walkable");
-        assert!(!walkable.contains(&(1, 0)), "Wall should not be walkable");
-        assert!(walkable.contains(&(2, 0)), "Floor1 should be walkable");
+        assert!(!walkable.contains(&(1, 0)), "Fence should not be walkable");
+        assert!(walkable.contains(&(2, 0)), "Grass should be walkable");
     }
 
     #[test]

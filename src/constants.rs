@@ -1,7 +1,7 @@
 /// Grid dimensions and tile size.
 pub const TILE_SIZE: u16 = 8;
-pub const DEFAULT_COLS: u16 = 20;
-pub const DEFAULT_ROWS: u16 = 11;
+pub const DEFAULT_COLS: u16 = 28;
+pub const DEFAULT_ROWS: u16 = 16;
 pub const MAX_COLS: u16 = 64;
 pub const MAX_ROWS: u16 = 64;
 
@@ -33,6 +33,9 @@ pub const EXTERNAL_THRESHOLD_SECS: u64 = 120;
 pub const DISMISSED_COOLDOWN_SECS: u64 = 180;
 pub const CLEAR_IDLE_THRESHOLD_MS: u64 = 2_000;
 pub const GLOBAL_MIN_FILE_SIZE: u64 = 3_072;
+
+/// Agent limits.
+pub const MAX_AGENTS: usize = 8;
 
 /// Visual constants.
 pub const PALETTE_COUNT: u8 = 6;

@@ -12,26 +12,26 @@ pub type Pixel = (u8, u8, u8, u8);
 /// 2D sprite: rows of pixels. `sprite[y][x]` = pixel at (x, y).
 pub type SpriteData = Vec<Vec<Pixel>>;
 
-/// Tile coordinate on the office grid: (col, row).
+/// Tile coordinate on the farm grid: (col, row).
 pub type TilePos = (u16, u16);
 
 // ---------------------------------------------------------------------------
 // Tile types
 // ---------------------------------------------------------------------------
 
-/// Tile type stored in the office grid. `repr(u8)` matches the serialized format.
+/// Tile type stored in the farm grid. `repr(u8)` matches the serialized format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum TileType {
     Void = 0,
-    Floor1 = 1,
-    Floor2 = 2,
-    Floor3 = 3,
-    Floor4 = 4,
-    Floor5 = 5,
-    Floor6 = 6,
-    Floor7 = 7,
-    Wall = 100,
+    Grass = 1,
+    GrassDark = 2,
+    Dirt = 3,
+    DirtDark = 4,
+    Water = 5,
+    Sand = 6,
+    Stone = 7,
+    Fence = 100,
 }
 
 impl TileType {
@@ -39,30 +39,23 @@ impl TileType {
     pub fn from_u8(value: u8) -> Self {
         match value {
             0 => Self::Void,
-            1 => Self::Floor1,
-            2 => Self::Floor2,
-            3 => Self::Floor3,
-            4 => Self::Floor4,
-            5 => Self::Floor5,
-            6 => Self::Floor6,
-            7 => Self::Floor7,
-            100 => Self::Wall,
-            // Legacy VOID value and unknown tiles map to Void
+            1 => Self::Grass,
+            2 => Self::GrassDark,
+            3 => Self::Dirt,
+            4 => Self::DirtDark,
+            5 => Self::Water,
+            6 => Self::Sand,
+            7 => Self::Stone,
+            100 => Self::Fence,
             _ => Self::Void,
         }
     }
 
-    /// Returns true if this tile is a walkable floor type.
+    /// Returns true if this tile is walkable ground.
     pub fn is_floor(self) -> bool {
         matches!(
             self,
-            Self::Floor1
-                | Self::Floor2
-                | Self::Floor3
-                | Self::Floor4
-                | Self::Floor5
-                | Self::Floor6
-                | Self::Floor7
+            Self::Grass | Self::GrassDark | Self::Dirt | Self::DirtDark | Self::Sand | Self::Stone
         )
     }
 }
@@ -111,6 +104,14 @@ pub enum AgentStatus {
 pub enum BubbleKind {
     Permission,
     Waiting,
+}
+
+/// Companion animal kind for sub-agent visualization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CompanionKind {
+    Chicken,
+    Cat,
+    Dog,
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +175,19 @@ pub struct PlacedFurniture {
     pub color: Option<TileColor>,
 }
 
+impl PlacedFurniture {
+    /// Shorthand constructor with no color override.
+    pub fn new(uid: &str, furniture_type: &str, col: i16, row: i16) -> Self {
+        Self {
+            uid: uid.to_owned(),
+            furniture_type: furniture_type.to_owned(),
+            col,
+            row,
+            color: None,
+        }
+    }
+}
+
 /// Serializable office layout. Compatible with the VS Code extension format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OfficeLayout {
@@ -195,14 +209,14 @@ mod tests {
     #[test]
     fn tile_type_from_u8_known_values() {
         assert_eq!(TileType::from_u8(0), TileType::Void);
-        assert_eq!(TileType::from_u8(1), TileType::Floor1);
-        assert_eq!(TileType::from_u8(2), TileType::Floor2);
-        assert_eq!(TileType::from_u8(3), TileType::Floor3);
-        assert_eq!(TileType::from_u8(4), TileType::Floor4);
-        assert_eq!(TileType::from_u8(5), TileType::Floor5);
-        assert_eq!(TileType::from_u8(6), TileType::Floor6);
-        assert_eq!(TileType::from_u8(7), TileType::Floor7);
-        assert_eq!(TileType::from_u8(100), TileType::Wall);
+        assert_eq!(TileType::from_u8(1), TileType::Grass);
+        assert_eq!(TileType::from_u8(2), TileType::GrassDark);
+        assert_eq!(TileType::from_u8(3), TileType::Dirt);
+        assert_eq!(TileType::from_u8(4), TileType::DirtDark);
+        assert_eq!(TileType::from_u8(5), TileType::Water);
+        assert_eq!(TileType::from_u8(6), TileType::Sand);
+        assert_eq!(TileType::from_u8(7), TileType::Stone);
+        assert_eq!(TileType::from_u8(100), TileType::Fence);
     }
 
     #[test]
@@ -214,20 +228,19 @@ mod tests {
 
     #[test]
     fn tile_type_is_floor() {
-        assert!(TileType::Floor1.is_floor());
-        assert!(TileType::Floor2.is_floor());
-        assert!(TileType::Floor3.is_floor());
-        assert!(TileType::Floor4.is_floor());
-        assert!(TileType::Floor5.is_floor());
-        assert!(TileType::Floor6.is_floor());
-        assert!(TileType::Floor7.is_floor());
+        assert!(TileType::Grass.is_floor());
+        assert!(TileType::GrassDark.is_floor());
+        assert!(TileType::Dirt.is_floor());
+        assert!(TileType::DirtDark.is_floor());
+        assert!(TileType::Sand.is_floor());
+        assert!(TileType::Stone.is_floor());
         assert!(!TileType::Void.is_floor());
-        assert!(!TileType::Wall.is_floor());
+        assert!(!TileType::Water.is_floor());
+        assert!(!TileType::Fence.is_floor());
     }
 
     #[test]
-    fn tile_type_legacy_void_maps_correctly() {
-        // Value 8 was the legacy void in older layouts
+    fn tile_type_unknown_maps_to_void() {
         assert_eq!(TileType::from_u8(8), TileType::Void);
     }
 }

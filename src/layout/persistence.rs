@@ -8,7 +8,7 @@ use crate::constants::{DEFAULT_COLS, DEFAULT_ROWS};
 use crate::types::{OfficeLayout, PlacedFurniture, TileColor, TileType};
 
 /// Current bundled layout revision. Layouts with a lower revision are replaced.
-const BUNDLED_REVISION: u32 = 1;
+const BUNDLED_REVISION: u32 = 2;
 
 /// Layout filename within the pixel-agents directory.
 const LAYOUT_FILENAME: &str = "layout.json";
@@ -88,103 +88,180 @@ pub fn load_or_default() -> Result<OfficeLayout> {
     Ok(default_layout())
 }
 
-/// Bundled default office layout: 20x11 grid with floor tiles, walls, desks,
-/// and chairs so the app has content on first launch.
+/// Bundled default farm layout: 28x16 grid with grass, dirt paths, a pond,
+/// crop fields, and stumps so the app has content on first launch.
 pub fn default_layout() -> OfficeLayout {
     let cols = DEFAULT_COLS;
     let rows = DEFAULT_ROWS;
     let total = (cols as usize) * (rows as usize);
-    let mut tiles = vec![TileType::Void as u8; total];
+    let mut tiles = vec![TileType::Grass as u8; total];
 
-    // Fill interior with alternating floor tiles (rows 1..rows-1, cols 1..cols-1)
-    for r in 1..(rows - 1) {
-        for c in 1..(cols - 1) {
-            let idx = (r as usize) * (cols as usize) + (c as usize);
-            // Checkerboard pattern with Floor1/Floor2
-            let tile = if (r + c) % 2 == 0 {
-                TileType::Floor1
-            } else {
-                TileType::Floor2
-            };
-            tiles[idx] = tile as u8;
+    // Helper to set a tile by (col, row).
+    let set = |tiles: &mut Vec<u8>, c: u16, r: u16, tt: TileType| {
+        let idx = (r as usize) * (cols as usize) + (c as usize);
+        tiles[idx] = tt as u8;
+    };
+
+    // Border: row 0, row 15, col 0, col 27 are Fence.
+    for c in 0..cols {
+        set(&mut tiles, c, 0, TileType::Fence);
+        set(&mut tiles, c, rows - 1, TileType::Fence);
+    }
+    for r in 0..rows {
+        set(&mut tiles, 0, r, TileType::Fence);
+        set(&mut tiles, cols - 1, r, TileType::Fence);
+    }
+
+    // GrassDark patches for variety.
+    let dark_patches: &[(u16, u16)] = &[
+        (3, 8),
+        (4, 8),
+        (5, 9),
+        (8, 12),
+        (9, 12),
+        (9, 13),
+        (15, 9),
+        (16, 10),
+        (10, 7),
+        (11, 7),
+        (6, 13),
+        (7, 13),
+        (12, 11),
+    ];
+    for &(c, r) in dark_patches {
+        set(&mut tiles, c, r, TileType::GrassDark);
+    }
+
+    // Stone path from entrance (bottom, col 14) up through the farm.
+    for r in 1..15 {
+        set(&mut tiles, 14, r, TileType::Stone);
+    }
+    // Widen the path slightly near the entrance.
+    for r in 12..15 {
+        set(&mut tiles, 13, r, TileType::Stone);
+    }
+    // Branch path toward crop field (right).
+    for c in 15..18 {
+        set(&mut tiles, c, 6, TileType::Stone);
+    }
+    // Branch path toward cabin (left).
+    for c in 7..14 {
+        set(&mut tiles, c, 4, TileType::Stone);
+    }
+
+    // Crop field (top-right, cols 18-25, rows 2-6): Dirt tiles.
+    for r in 2..=6 {
+        for c in 18..=25 {
+            set(&mut tiles, c, r, TileType::Dirt);
+        }
+    }
+    // Darker dirt rows for tilled soil.
+    for c in 18..=25 {
+        set(&mut tiles, c, 3, TileType::DirtDark);
+        set(&mut tiles, c, 5, TileType::DirtDark);
+    }
+
+    // Pond (bottom-right, cols 20-25, rows 11-14): Water tiles, irregular.
+    let pond: &[(u16, u16)] = &[
+        (21, 11),
+        (22, 11),
+        (23, 11),
+        (24, 11),
+        (20, 12),
+        (21, 12),
+        (22, 12),
+        (23, 12),
+        (24, 12),
+        (25, 12),
+        (20, 13),
+        (21, 13),
+        (22, 13),
+        (23, 13),
+        (24, 13),
+        (25, 13),
+        (21, 14),
+        (22, 14),
+        (23, 14),
+        (24, 14),
+    ];
+    for &(c, r) in pond {
+        set(&mut tiles, c, r, TileType::Water);
+    }
+    // Sandy shore around the pond.
+    let sand: &[(u16, u16)] = &[
+        (20, 11),
+        (25, 11),
+        (19, 12),
+        (26, 12),
+        (19, 13),
+        (26, 13),
+        (20, 14),
+        (25, 14),
+    ];
+    for &(c, r) in sand {
+        set(&mut tiles, c, r, TileType::Sand);
+    }
+
+    // Cabin area (top-left, cols 2-6, rows 2-5): Dirt floor inside cabin.
+    for r in 2..=5 {
+        for c in 2..=6 {
+            set(&mut tiles, c, r, TileType::Dirt);
         }
     }
 
-    // Top and bottom walls
-    for c in 0..cols {
-        tiles[c as usize] = TileType::Wall as u8;
-        tiles[((rows - 1) as usize) * (cols as usize) + (c as usize)] = TileType::Wall as u8;
-    }
-    // Left and right walls
-    for r in 0..rows {
-        tiles[(r as usize) * (cols as usize)] = TileType::Wall as u8;
-        tiles[(r as usize) * (cols as usize) + ((cols - 1) as usize)] = TileType::Wall as u8;
-    }
-
-    // Place some furniture: two desk+chair workstations
+    // Furniture placement.
     let furniture = vec![
-        // Workstation 1: desk at (3,3), chair at (3,4)
-        PlacedFurniture {
-            uid: "desk-1".to_owned(),
-            furniture_type: "DESK_FRONT".to_owned(),
-            col: 3,
-            row: 3,
-            color: None,
-        },
-        PlacedFurniture {
-            uid: "chair-1".to_owned(),
-            furniture_type: "WOODEN_CHAIR_BACK".to_owned(),
-            col: 3,
-            row: 4,
-            color: None,
-        },
-        PlacedFurniture {
-            uid: "monitor-1".to_owned(),
-            furniture_type: "MONITOR".to_owned(),
-            col: 3,
-            row: 3,
-            color: None,
-        },
-        // Workstation 2: desk at (10,3), chair at (10,4)
-        PlacedFurniture {
-            uid: "desk-2".to_owned(),
-            furniture_type: "DESK_FRONT".to_owned(),
-            col: 10,
-            row: 3,
-            color: None,
-        },
-        PlacedFurniture {
-            uid: "chair-2".to_owned(),
-            furniture_type: "WOODEN_CHAIR_BACK".to_owned(),
-            col: 10,
-            row: 4,
-            color: None,
-        },
-        PlacedFurniture {
-            uid: "laptop-2".to_owned(),
-            furniture_type: "LAPTOP".to_owned(),
-            col: 11,
-            row: 3,
-            color: None,
-        },
-        // Decor
-        PlacedFurniture {
-            uid: "plant-1".to_owned(),
-            furniture_type: "PLANT".to_owned(),
-            col: 17,
-            row: 2,
-            color: None,
-        },
-        PlacedFurniture {
-            uid: "bookshelf-1".to_owned(),
-            furniture_type: "BOOKSHELF".to_owned(),
-            col: 15,
-            row: 8,
-            color: None,
-        },
+        // --- Cabin structure (L-shaped) ---
+        PlacedFurniture::new("cabin-1", "CABIN_WALL", 2, 2),
+        PlacedFurniture::new("cabin-2", "CABIN_WALL", 3, 2),
+        PlacedFurniture::new("cabin-3", "CABIN_WALL", 4, 2),
+        PlacedFurniture::new("cabin-4", "CABIN_WALL", 5, 2),
+        PlacedFurniture::new("cabin-5", "CABIN_WALL", 6, 2),
+        PlacedFurniture::new("cabin-6", "CABIN_WALL", 2, 3),
+        PlacedFurniture::new("cabin-7", "CABIN_WALL", 2, 4),
+        PlacedFurniture::new("cabin-8", "CABIN_WALL", 2, 5),
+        PlacedFurniture::new("cabin-seat", "STUMP_FRONT", 4, 4),
+        // --- Crop field plots ---
+        PlacedFurniture::new("crop-1", "CROP_PLOT", 19, 3),
+        PlacedFurniture::new("crop-2", "CROP_PLOT", 21, 3),
+        PlacedFurniture::new("crop-3", "CROP_PLOT", 23, 3),
+        PlacedFurniture::new("crop-4", "CROP_PLOT", 25, 3),
+        PlacedFurniture::new("crop-5", "CROP_PLOT", 19, 5),
+        PlacedFurniture::new("crop-6", "CROP_PLOT", 21, 5),
+        PlacedFurniture::new("crop-7", "CROP_PLOT", 23, 5),
+        PlacedFurniture::new("crop-8", "CROP_PLOT", 25, 5),
+        // --- Stumps near crop plots (facing up toward crops) ---
+        PlacedFurniture::new("stump-1", "STUMP_BACK", 19, 4),
+        PlacedFurniture::new("stump-2", "STUMP_BACK", 21, 4),
+        PlacedFurniture::new("stump-3", "STUMP_BACK", 23, 4),
+        PlacedFurniture::new("stump-4", "STUMP_BACK", 25, 4),
+        PlacedFurniture::new("stump-5", "STUMP_BACK", 19, 6),
+        PlacedFurniture::new("stump-6", "STUMP_BACK", 21, 6),
+        PlacedFurniture::new("stump-7", "STUMP_BACK", 23, 6),
+        PlacedFurniture::new("stump-8", "STUMP_BACK", 25, 6),
+        // --- Fishing spots at pond edge ---
+        PlacedFurniture::new("fish-1", "FISHING_SPOT", 19, 12),
+        PlacedFurniture::new("fish-2", "FISHING_SPOT", 20, 14),
+        // --- Scarecrow in crop field ---
+        PlacedFurniture::new("scarecrow-1", "SCARECROW", 22, 2),
+        // --- Well in central area ---
+        PlacedFurniture::new("well-1", "WELL", 12, 8),
+        // --- Mailbox near entrance path ---
+        PlacedFurniture::new("mailbox-1", "MAILBOX", 15, 13),
+        // --- Trees scattered around edges ---
+        PlacedFurniture::new("tree-1", "TREE", 2, 8),
+        PlacedFurniture::new("tree-2", "TREE", 8, 2),
+        PlacedFurniture::new("tree-3", "TREE_FRUIT", 10, 2),
+        PlacedFurniture::new("tree-4", "TREE", 2, 12),
+        PlacedFurniture::new("tree-5", "TREE_FRUIT", 5, 12),
+        PlacedFurniture::new("tree-6", "TREE", 17, 2),
+        PlacedFurniture::new("tree-7", "TREE", 8, 10),
+        // --- Lanterns along path ---
+        PlacedFurniture::new("lantern-1", "LANTERN", 13, 9),
+        PlacedFurniture::new("lantern-2", "LANTERN", 15, 4),
     ];
 
-    // Generate tile colors for floor tiles
+    // Generate tile colors for floor tiles.
     let mut tile_colors = HashMap::new();
     for r in 0..rows {
         for c in 0..cols {
@@ -235,22 +312,17 @@ fn migrate_void_tiles(layout: &mut OfficeLayout) {
     }
 }
 
-/// Migration 2: legacy furniture names → canonical names.
+/// Migration 2: legacy furniture names → canonical farm names.
 fn migrate_furniture_types(layout: &mut OfficeLayout) {
     for item in &mut layout.furniture {
         let migrated = match item.furniture_type.as_str() {
-            "desk" | "Desk" => "DESK_FRONT",
-            "desk_left" => "DESK_LEFT",
-            "desk_right" => "DESK_RIGHT",
-            "chair" | "Chair" => "WOODEN_CHAIR_FRONT",
-            "chair_back" => "WOODEN_CHAIR_BACK",
-            "chair_left" => "WOODEN_CHAIR_LEFT",
-            "chair_right" => "WOODEN_CHAIR_RIGHT",
-            "monitor" | "Monitor" => "MONITOR",
-            "laptop" | "Laptop" => "LAPTOP",
-            "lamp" | "Lamp" => "LAMP",
-            "plant" | "Plant" => "PLANT",
-            "bookshelf" | "Bookshelf" => "BOOKSHELF",
+            "desk" | "Desk" | "DESK_FRONT" | "DESK_LEFT" | "DESK_RIGHT" => "CROP_PLOT",
+            "chair" | "Chair" | "WOODEN_CHAIR_FRONT" | "WOODEN_CHAIR_BACK"
+            | "WOODEN_CHAIR_LEFT" | "WOODEN_CHAIR_RIGHT" => "STUMP_FRONT",
+            "monitor" | "Monitor" | "MONITOR" | "laptop" | "Laptop" | "LAPTOP" => "SCARECROW",
+            "lamp" | "Lamp" | "LAMP" => "LANTERN",
+            "plant" | "Plant" | "PLANT" => "TREE",
+            "bookshelf" | "Bookshelf" | "BOOKSHELF" => "WELL",
             _ => continue,
         };
         item.furniture_type = migrated.to_owned();
@@ -290,29 +362,41 @@ fn migrate_layout_revision(layout: &mut OfficeLayout) {
 /// Default HSL color for a given floor tile type.
 fn default_tile_color(tt: TileType) -> TileColor {
     match tt {
-        // Warm beige
-        TileType::Floor1 => TileColor {
-            h: 35.0,
-            s: 0.25,
-            b: 0.85,
+        // Light green grass
+        TileType::Grass => TileColor {
+            h: 120.0,
+            s: 0.40,
+            b: 0.55,
         },
-        // Slightly darker brown
-        TileType::Floor2 => TileColor {
+        // Darker green grass
+        TileType::GrassDark => TileColor {
+            h: 130.0,
+            s: 0.45,
+            b: 0.40,
+        },
+        // Brown dirt
+        TileType::Dirt => TileColor {
             h: 30.0,
-            s: 0.30,
+            s: 0.45,
+            b: 0.45,
+        },
+        // Darker tilled dirt
+        TileType::DirtDark => TileColor {
+            h: 25.0,
+            s: 0.50,
+            b: 0.35,
+        },
+        // Sandy beige
+        TileType::Sand => TileColor {
+            h: 45.0,
+            s: 0.35,
             b: 0.75,
         },
-        // Purple tint
-        TileType::Floor3 => TileColor {
-            h: 270.0,
-            s: 0.15,
-            b: 0.80,
-        },
-        // Tan
-        TileType::Floor4 => TileColor {
-            h: 40.0,
-            s: 0.20,
-            b: 0.82,
+        // Grey stone path
+        TileType::Stone => TileColor {
+            h: 0.0,
+            s: 0.05,
+            b: 0.65,
         },
         // Remaining floor types: neutral grey
         _ => TileColor {
@@ -333,9 +417,9 @@ mod tests {
     #[test]
     fn default_layout_has_correct_dimensions() {
         let layout = default_layout();
-        assert_eq!(layout.cols, 20);
-        assert_eq!(layout.rows, 11);
-        assert_eq!(layout.tiles.len(), 220);
+        assert_eq!(layout.cols, 28);
+        assert_eq!(layout.rows, 16);
+        assert_eq!(layout.tiles.len(), 448);
     }
 
     #[test]
@@ -352,11 +436,14 @@ mod tests {
     }
 
     #[test]
-    fn default_layout_walls_surround_floor() {
+    fn default_layout_fence_surrounds_grass() {
         let layout = default_layout();
-        // Top-left corner is wall
-        assert_eq!(layout.tiles[0], TileType::Wall as u8);
-        // Interior tile is floor
+        // Top-left corner is Fence
+        assert_eq!(layout.tiles[0], TileType::Fence as u8);
+        // Bottom-right corner is Fence
+        let last = (layout.rows as usize - 1) * (layout.cols as usize) + (layout.cols as usize - 1);
+        assert_eq!(layout.tiles[last], TileType::Fence as u8);
+        // Interior tile (1,1) is a floor type (Grass)
         let idx = 1 * (layout.cols as usize) + 1;
         let tt = TileType::from_u8(layout.tiles[idx]);
         assert!(tt.is_floor());
@@ -411,7 +498,7 @@ mod tests {
             .iter()
             .find(|f| f.uid == "legacy-desk")
             .unwrap();
-        assert_eq!(migrated.furniture_type, "DESK_FRONT");
+        assert_eq!(migrated.furniture_type, "CROP_PLOT");
     }
 
     #[test]

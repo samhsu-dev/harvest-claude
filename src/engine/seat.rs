@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn derive_single_chair() {
         let furniture = vec![make_chair("c1", 3, 4, Direction::Down)];
-        let tile_map = vec![vec![TileType::Floor1; 10]; 10];
+        let tile_map = vec![vec![TileType::Grass; 10]; 10];
         let seats = derive_seats(&furniture, &tile_map);
         assert_eq!(seats.len(), 1);
         assert_eq!(seats[0].col, 3);

@@ -1,59 +1,48 @@
-use crate::types::{AnimType, BubbleKind, Direction, Pixel, SpriteData, TileType};
+use crate::types::{AnimType, BubbleKind, CompanionKind, Direction, Pixel, SpriteData, TileType};
 
 // ---------------------------------------------------------------------------
-// Character palettes (6 distinct color schemes, index 0..5)
+// Dawnbringer 16-color palette (ThKaspar micro-tileset)
+// ---------------------------------------------------------------------------
+
+const GRASS_GREEN: Pixel = (109, 170, 44, 255);
+const DARK_GREEN: Pixel = (52, 101, 36, 255);
+const MID_GREEN: Pixel = (75, 136, 40, 255);
+const DIRT_BROWN: Pixel = (133, 76, 48, 255);
+const DARK_BROWN: Pixel = (68, 36, 52, 255);
+const WOOD: Pixel = (210, 125, 44, 255);
+const WHEAT: Pixel = (218, 212, 94, 255);
+const WATER_BLUE: Pixel = (109, 194, 202, 255);
+const WATER_DARK: Pixel = (89, 125, 206, 255);
+const LIGHT: Pixel = (222, 238, 214, 255);
+const STONE_GREY: Pixel = (78, 74, 78, 255);
+const DARK: Pixel = (20, 12, 28, 255);
+const WARM_RED: Pixel = (172, 50, 50, 255);
+const SKIN_MED: Pixel = (210, 170, 130, 255);
+
+// ---------------------------------------------------------------------------
+// Character palettes (6 farm character variants)
 // ---------------------------------------------------------------------------
 
 // Each palette: (skin, hair, shirt, pants, shoes)
 const PALETTES: [(Pixel, Pixel, Pixel, Pixel, Pixel); 6] = [
-    // 0: Blue shirt, brown hair
+    // 0: Farmer — tan skin, brown hair, blue overalls
+    (SKIN_MED, DIRT_BROWN, WATER_BLUE, WATER_DARK, DARK_BROWN),
+    // 1: Rancher — lighter skin, black hair, red flannel
+    (LIGHT, DARK, WARM_RED, DARK_BROWN, DARK),
+    // 2: Gardener — tan skin, blonde/green bandana, green shirt
+    (SKIN_MED, WHEAT, MID_GREEN, DARK_GREEN, DARK_BROWN),
+    // 3: Berry picker — skin, purple hair ribbon, purple outfit
     (
-        (235, 200, 160, 255),
-        (100, 60, 30, 255),
-        (60, 100, 180, 255),
-        (50, 50, 70, 255),
-        (40, 30, 20, 255),
-    ),
-    // 1: Red shirt, black hair
-    (
-        (220, 185, 150, 255),
-        (30, 25, 20, 255),
-        (180, 50, 50, 255),
-        (40, 40, 60, 255),
-        (30, 25, 20, 255),
-    ),
-    // 2: Green shirt, blonde hair
-    (
-        (240, 210, 170, 255),
-        (210, 180, 80, 255),
-        (60, 150, 80, 255),
-        (60, 55, 75, 255),
-        (50, 35, 25, 255),
-    ),
-    // 3: Purple shirt, red hair
-    (
-        (230, 195, 155, 255),
-        (160, 50, 30, 255),
+        LIGHT,
+        (140, 60, 140, 255),
         (120, 60, 160, 255),
-        (45, 45, 65, 255),
-        (35, 28, 22, 255),
+        DARK_BROWN,
+        DARK,
     ),
-    // 4: Orange shirt, dark brown hair
-    (
-        (225, 190, 145, 255),
-        (60, 40, 20, 255),
-        (200, 120, 40, 255),
-        (55, 50, 70, 255),
-        (45, 32, 22, 255),
-    ),
-    // 5: Teal shirt, gray hair
-    (
-        (238, 205, 165, 255),
-        (130, 130, 140, 255),
-        (50, 150, 150, 255),
-        (48, 48, 68, 255),
-        (38, 30, 22, 255),
-    ),
+    // 4: Harvest worker — skin, dark hair, orange vest
+    (SKIN_MED, DARK_BROWN, WOOD, DIRT_BROWN, DARK),
+    // 5: Fisher — skin, grey hat, teal shirt
+    (LIGHT, STONE_GREY, (50, 150, 150, 255), DARK_BROWN, DARK),
 ];
 
 const T: Pixel = (0, 0, 0, 0); // transparent
@@ -71,7 +60,6 @@ pub fn character_sprite(
     let idx = (palette % 6) as usize;
     let (skin, hair, shirt, pants, shoes) = PALETTES[idx];
 
-    // Direction determines facing: Down = front, Up = back, Right = side
     // Left is rendered as flipped Right at the blit layer
     let dir = match direction {
         Direction::Left => Direction::Right,
@@ -106,14 +94,14 @@ fn build_front(pal: &CharPalette, anim_type: AnimType, frame: u8) -> SpriteData 
     let c = pal.shirt;
     let p = pal.pants;
     let f = pal.shoes;
-    let eye = (40, 40, 50, 255);
+    let eye = DARK;
 
     let mut rows: Vec<Vec<Pixel>> = vec![
-        // Row 0: top of hair
-        vec![T, T, h, h, h, h, T, T],
-        // Row 1: hair sides
+        // Row 0: hat brim / top of hair (wider for straw hat feel)
         vec![T, h, h, h, h, h, h, T],
-        // Row 2: face with eyes
+        // Row 1: hair full
+        vec![h, h, h, h, h, h, h, h],
+        // Row 2: face with hair sides
         vec![T, h, s, s, s, s, h, T],
         // Row 3: eyes
         vec![T, h, eye, s, s, eye, h, T],
@@ -121,13 +109,13 @@ fn build_front(pal: &CharPalette, anim_type: AnimType, frame: u8) -> SpriteData 
         vec![T, T, s, s, s, s, T, T],
         // Row 5: neck
         vec![T, T, T, s, s, T, T, T],
-        // Row 6: shoulders
+        // Row 6: shoulders (overalls/work shirt)
         vec![T, c, c, c, c, c, c, T],
         // Row 7: upper torso
-        vec![T, c, c, c, c, c, c, T],
+        vec![c, c, c, c, c, c, c, c],
         // Row 8: mid torso
-        vec![T, T, c, c, c, c, T, T],
-        // Row 9: lower torso
+        vec![T, c, c, c, c, c, c, T],
+        // Row 9: lower torso / belt
         vec![T, T, c, c, c, c, T, T],
         // Row 10: upper legs
         vec![T, T, p, p, p, p, T, T],
@@ -155,15 +143,15 @@ fn build_back(pal: &CharPalette, anim_type: AnimType, frame: u8) -> SpriteData {
     let f = pal.shoes;
 
     let mut rows: Vec<Vec<Pixel>> = vec![
-        vec![T, T, h, h, h, h, T, T],
         vec![T, h, h, h, h, h, h, T],
+        vec![h, h, h, h, h, h, h, h],
         vec![T, h, h, h, h, h, h, T],
         vec![T, h, h, h, h, h, h, T],
         vec![T, T, s, s, s, s, T, T],
         vec![T, T, T, s, s, T, T, T],
         vec![T, c, c, c, c, c, c, T],
+        vec![c, c, c, c, c, c, c, c],
         vec![T, c, c, c, c, c, c, T],
-        vec![T, T, c, c, c, c, T, T],
         vec![T, T, c, c, c, c, T, T],
         vec![T, T, p, p, p, p, T, T],
         vec![T, T, p, p, p, p, T, T],
@@ -183,17 +171,17 @@ fn build_side(pal: &CharPalette, anim_type: AnimType, frame: u8) -> SpriteData {
     let c = pal.shirt;
     let p = pal.pants;
     let f = pal.shoes;
-    let eye = (40, 40, 50, 255);
+    let eye = DARK;
 
     let mut rows: Vec<Vec<Pixel>> = vec![
-        vec![T, T, h, h, h, h, T, T],
         vec![T, h, h, h, h, h, T, T],
+        vec![h, h, h, h, h, h, T, T],
         vec![T, h, s, s, s, h, T, T],
         vec![T, h, s, eye, s, s, T, T],
         vec![T, T, s, s, s, T, T, T],
         vec![T, T, T, s, s, T, T, T],
         vec![T, T, c, c, c, c, T, T],
-        vec![T, c, c, c, c, c, T, T],
+        vec![T, c, c, c, c, c, c, T],
         vec![T, T, c, c, c, T, T, T],
         vec![T, T, c, c, c, T, T, T],
         vec![T, T, p, p, p, T, T, T],
@@ -254,7 +242,6 @@ fn apply_animation(
         AnimType::Read => {
             // 2-frame reading: subtle head bob
             if frame % 2 == 1 {
-                // Shift head down slightly by making row 0 transparent
                 rows[0] = vec![T; 8];
             }
         }
@@ -263,203 +250,414 @@ fn apply_animation(
 
 /// Generate an 8x8 floor tile sprite for the given tile type.
 ///
-/// Different grayscale patterns per floor variant.
+/// Uses Dawnbringer 16 palette for farm terrain.
 pub fn floor_sprite(tile: TileType) -> SpriteData {
-    let base: u8 = match tile {
-        TileType::Floor1 => 180,
-        TileType::Floor2 => 170,
-        TileType::Floor3 => 160,
-        TileType::Floor4 => 190,
-        TileType::Floor5 => 175,
-        TileType::Floor6 => 165,
-        TileType::Floor7 => 185,
-        TileType::Void | TileType::Wall => 100,
-    };
-
-    let light = base.saturating_add(10);
-    let dark = base.saturating_sub(10);
-
-    let a: Pixel = (base, base, base, 255);
-    let b: Pixel = (light, light, light, 255);
-    let c: Pixel = (dark, dark, dark, 255);
-
-    // Subtle checkerboard-like pattern
     match tile {
-        TileType::Floor1 | TileType::Floor4 | TileType::Floor7 => vec![
-            vec![a, a, b, b, a, a, b, b],
-            vec![a, a, b, b, a, a, b, b],
-            vec![b, b, a, a, b, b, a, a],
-            vec![b, b, a, a, b, b, a, a],
-            vec![a, a, b, b, a, a, b, b],
-            vec![a, a, b, b, a, a, b, b],
-            vec![b, b, a, a, b, b, a, a],
-            vec![b, b, a, a, b, b, a, a],
-        ],
-        TileType::Floor2 | TileType::Floor5 => vec![
-            vec![a, b, a, b, a, b, a, b],
-            vec![b, a, b, a, b, a, b, a],
-            vec![a, b, a, b, a, b, a, b],
-            vec![b, a, b, a, b, a, b, a],
-            vec![a, b, a, b, a, b, a, b],
-            vec![b, a, b, a, b, a, b, a],
-            vec![a, b, a, b, a, b, a, b],
-            vec![b, a, b, a, b, a, b, a],
-        ],
-        TileType::Floor3 | TileType::Floor6 => vec![
-            vec![a, a, a, a, c, a, a, a],
-            vec![a, a, a, a, a, a, a, c],
-            vec![a, a, c, a, a, a, a, a],
-            vec![a, a, a, a, a, c, a, a],
-            vec![c, a, a, a, a, a, a, a],
-            vec![a, a, a, c, a, a, a, a],
-            vec![a, a, a, a, a, a, c, a],
-            vec![a, c, a, a, a, a, a, a],
-        ],
-        TileType::Void | TileType::Wall => vec![vec![a; 8]; 8],
+        TileType::Grass => {
+            // Lush green with subtle variation
+            let a = GRASS_GREEN;
+            let b = MID_GREEN;
+            vec![
+                vec![a, a, b, a, a, b, a, a],
+                vec![a, a, a, a, b, a, a, a],
+                vec![b, a, a, a, a, a, b, a],
+                vec![a, a, a, b, a, a, a, a],
+                vec![a, b, a, a, a, a, a, b],
+                vec![a, a, a, a, b, a, a, a],
+                vec![a, a, b, a, a, a, a, a],
+                vec![a, a, a, a, a, b, a, a],
+            ]
+        }
+        TileType::GrassDark => {
+            let a = MID_GREEN;
+            let b = DARK_GREEN;
+            vec![
+                vec![a, a, b, a, a, a, b, a],
+                vec![a, a, a, a, b, a, a, a],
+                vec![b, a, a, a, a, a, a, b],
+                vec![a, a, b, a, a, b, a, a],
+                vec![a, a, a, a, a, a, b, a],
+                vec![a, b, a, a, b, a, a, a],
+                vec![a, a, a, b, a, a, a, a],
+                vec![b, a, a, a, a, a, a, b],
+            ]
+        }
+        TileType::Dirt => {
+            // Tilled soil with horizontal furrow lines
+            let a = DIRT_BROWN;
+            let b = DARK_BROWN;
+            vec![
+                vec![a, a, a, a, a, a, a, a],
+                vec![b, b, b, b, b, b, b, b],
+                vec![a, a, a, a, a, a, a, a],
+                vec![a, a, a, a, a, a, a, a],
+                vec![b, b, b, b, b, b, b, b],
+                vec![a, a, a, a, a, a, a, a],
+                vec![a, a, a, a, a, a, a, a],
+                vec![b, b, b, b, b, b, b, b],
+            ]
+        }
+        TileType::DirtDark => {
+            let a = DARK_BROWN;
+            let b = DIRT_BROWN;
+            vec![
+                vec![a, a, a, a, a, a, a, a],
+                vec![a, a, b, a, a, b, a, a],
+                vec![a, a, a, a, a, a, a, a],
+                vec![a, b, a, a, b, a, a, b],
+                vec![a, a, a, a, a, a, a, a],
+                vec![a, a, a, b, a, a, b, a],
+                vec![a, a, a, a, a, a, a, a],
+                vec![a, b, a, a, a, b, a, a],
+            ]
+        }
+        TileType::Water => {
+            // Animated-looking wave pattern
+            let a = WATER_BLUE;
+            let b = WATER_DARK;
+            vec![
+                vec![a, a, b, a, a, a, b, a],
+                vec![a, b, a, a, a, b, a, a],
+                vec![b, a, a, a, b, a, a, a],
+                vec![a, a, a, b, a, a, a, b],
+                vec![a, a, b, a, a, a, b, a],
+                vec![a, b, a, a, a, b, a, a],
+                vec![b, a, a, a, b, a, a, a],
+                vec![a, a, a, b, a, a, a, b],
+            ]
+        }
+        TileType::Sand => {
+            let a = WHEAT;
+            let b = SKIN_MED;
+            vec![
+                vec![a, a, a, b, a, a, a, a],
+                vec![a, a, a, a, a, a, b, a],
+                vec![a, b, a, a, a, a, a, a],
+                vec![a, a, a, a, b, a, a, a],
+                vec![a, a, a, a, a, a, a, b],
+                vec![a, a, b, a, a, a, a, a],
+                vec![a, a, a, a, a, b, a, a],
+                vec![b, a, a, a, a, a, a, a],
+            ]
+        }
+        TileType::Stone => {
+            let a = STONE_GREY;
+            let b = DARK;
+            let c = LIGHT;
+            vec![
+                vec![a, a, a, b, a, a, a, a],
+                vec![a, c, a, a, a, c, a, a],
+                vec![a, a, a, a, a, a, a, b],
+                vec![b, a, a, a, b, a, a, a],
+                vec![a, a, a, a, a, a, a, a],
+                vec![a, a, b, a, a, a, b, a],
+                vec![a, a, a, a, c, a, a, a],
+                vec![a, a, a, a, a, a, a, a],
+            ]
+        }
+        TileType::Fence => vec![vec![DARK_BROWN; 8]; 8],
+        TileType::Void => vec![vec![DARK; 8]; 8],
     }
 }
 
-/// Generate an 8x16 wall sprite with auto-tiling based on neighbor bitmask.
+/// Generate an 8x16 fence sprite with auto-tiling based on neighbor bitmask.
 ///
-/// Neighbors: N=1, E=2, S=4, W=8. Adjusts top/bottom/left/right edges.
-pub fn wall_sprite(neighbors: u8) -> SpriteData {
-    let base: Pixel = (80, 80, 90, 255);
-    let light: Pixel = (100, 100, 110, 255);
-    let dark: Pixel = (55, 55, 65, 255);
-    let edge: Pixel = (40, 40, 50, 255);
+/// Neighbors: N=1, E=2, S=4, W=8. Adjusts post/rail connections.
+pub fn fence_sprite(neighbors: u8) -> SpriteData {
+    let post = WOOD;
+    let rail = DARK_BROWN;
+    let cap = WHEAT;
 
     let has_n = neighbors & 1 != 0;
     let has_e = neighbors & 2 != 0;
     let has_s = neighbors & 4 != 0;
     let has_w = neighbors & 8 != 0;
 
-    let mut sprite = vec![vec![base; 8]; 16];
+    let mut sprite = vec![vec![T; 8]; 16];
 
-    // Top edge highlight (no north neighbor)
+    // Fence post in center columns (3,4)
+    for row in &mut sprite {
+        row[3] = post;
+        row[4] = post;
+    }
+
+    // Top cap when no north neighbor
     if !has_n {
-        sprite[0] = vec![light; 8];
-        sprite[1] = vec![light; 8];
+        sprite[0][3] = cap;
+        sprite[0][4] = cap;
+        sprite[1][3] = cap;
+        sprite[1][4] = cap;
     }
 
-    // Bottom edge shadow (no south neighbor)
+    // Bottom anchor when no south neighbor
     if !has_s {
-        sprite[14] = vec![dark; 8];
-        sprite[15] = vec![edge; 8];
+        sprite[14][3] = rail;
+        sprite[14][4] = rail;
+        sprite[15][3] = rail;
+        sprite[15][4] = rail;
     }
 
-    // Left edge
-    if !has_w {
-        for row in &mut sprite {
-            row[0] = edge;
+    // Horizontal rail west
+    if has_w {
+        for &r in &[4usize, 5, 10, 11] {
+            for pixel in sprite[r].iter_mut().take(3) {
+                *pixel = rail;
+            }
         }
     }
 
-    // Right edge
-    if !has_e {
-        for row in &mut sprite {
-            row[7] = edge;
+    // Horizontal rail east
+    if has_e {
+        for &r in &[4usize, 5, 10, 11] {
+            for pixel in sprite[r].iter_mut().skip(5) {
+                *pixel = rail;
+            }
         }
     }
 
-    // Brick pattern in mid section
-    for (y, row) in sprite.iter_mut().enumerate().take(14).skip(3) {
-        if y % 4 == 3 {
-            *row = vec![dark; 8];
-        } else if y % 4 == 1 {
-            row[3] = dark;
-            row[4] = dark;
-        }
-    }
+    // Vertical grain detail on post
+    sprite[6][3] = rail;
+    sprite[8][4] = rail;
+    sprite[12][3] = rail;
 
     sprite
 }
 
 /// Generate a furniture sprite for the given kind.
 ///
-/// Supported: "DESK_FRONT", "WOODEN_CHAIR_FRONT", "MONITOR", "LAMP".
+/// Farm furniture types: crop plots, trees, stumps, wells, scarecrows, etc.
 /// Unknown kinds return a default placeholder sprite.
 pub fn furniture_sprite(kind: &str) -> SpriteData {
     match kind {
-        "DESK_FRONT" => desk_front_sprite(),
-        "WOODEN_CHAIR_FRONT" => chair_front_sprite(),
-        "MONITOR" => monitor_sprite(),
-        "LAMP" => lamp_sprite(),
+        "CROP_PLOT" => crop_plot_sprite(false),
+        "CROP_PLOT_ON" => crop_plot_sprite(true),
+        "STUMP_FRONT" => stump_front_sprite(),
+        "TREE" => tree_sprite(false),
+        "TREE_FRUIT" => tree_sprite(true),
+        "WELL" => well_sprite(),
+        "MAILBOX" => mailbox_sprite(false),
+        "MAILBOX_ON" => mailbox_sprite(true),
+        "SCARECROW" => scarecrow_sprite(),
+        "LANTERN" => lantern_sprite(),
+        "CABIN_WALL" => cabin_wall_sprite(),
+        "FENCE_H" => fence_h_sprite(),
+        "FENCE_V" => fence_v_sprite(),
+        "FISHING_SPOT" => fishing_spot_sprite(),
         _ => default_furniture_sprite(),
     }
 }
 
-fn desk_front_sprite() -> SpriteData {
-    let wood: Pixel = (140, 100, 60, 255);
-    let dark: Pixel = (100, 70, 40, 255);
-    let top: Pixel = (160, 120, 75, 255);
+fn crop_plot_sprite(active: bool) -> SpriteData {
+    let d = DIRT_BROWN;
+    let b = DARK_BROWN;
+    let g = GRASS_GREEN;
+    let w = WHEAT;
+
+    if active {
+        // Taller crops / wheat growing
+        vec![
+            vec![T, T, g, T, w, T, g, T],
+            vec![T, g, w, g, g, w, w, T],
+            vec![T, g, g, w, g, g, g, T],
+            vec![T, T, g, g, g, g, T, T],
+            vec![d, d, d, d, d, d, d, d],
+            vec![b, b, b, b, b, b, b, b],
+            vec![d, d, d, d, d, d, d, d],
+            vec![b, b, b, b, b, b, b, b],
+        ]
+    } else {
+        // Small green sprouts on dirt
+        vec![
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, g, T, T, g, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![d, d, d, d, d, d, d, d],
+            vec![b, b, b, b, b, b, b, b],
+            vec![d, d, d, d, d, d, d, d],
+            vec![b, b, b, b, b, b, b, b],
+        ]
+    }
+}
+
+fn stump_front_sprite() -> SpriteData {
+    let w = WOOD;
+    let b = DARK_BROWN;
+    let r = DIRT_BROWN; // ring detail
 
     vec![
-        vec![top, top, top, top, top, top, top, top],
-        vec![wood, wood, wood, wood, wood, wood, wood, wood],
-        vec![wood, dark, dark, dark, dark, dark, dark, wood],
-        vec![wood, dark, dark, dark, dark, dark, dark, wood],
-        vec![wood, dark, dark, dark, dark, dark, dark, wood],
-        vec![wood, T, T, T, T, T, T, wood],
-        vec![wood, T, T, T, T, T, T, wood],
-        vec![dark, T, T, T, T, T, T, dark],
+        vec![T, T, T, T, T, T, T, T],
+        vec![T, T, b, b, b, b, T, T],
+        vec![T, b, w, r, w, r, b, T],
+        vec![T, b, r, w, r, w, b, T],
+        vec![T, b, w, r, w, r, b, T],
+        vec![T, b, b, b, b, b, b, T],
+        vec![T, T, b, b, b, b, T, T],
+        vec![T, T, T, T, T, T, T, T],
     ]
 }
 
-fn chair_front_sprite() -> SpriteData {
-    let wood: Pixel = (120, 80, 45, 255);
-    let seat: Pixel = (150, 105, 60, 255);
-    let dark: Pixel = (90, 60, 35, 255);
+fn tree_sprite(has_fruit: bool) -> SpriteData {
+    let g = GRASS_GREEN;
+    let d = DARK_GREEN;
+    let w = WOOD;
+    let b = DARK_BROWN;
+    let fruit = WARM_RED;
+
+    let f1 = if has_fruit { fruit } else { g };
+    let f2 = if has_fruit { fruit } else { d };
 
     vec![
-        vec![T, wood, T, T, T, T, wood, T],
-        vec![T, wood, T, T, T, T, wood, T],
-        vec![T, wood, seat, seat, seat, seat, wood, T],
-        vec![T, T, seat, seat, seat, seat, T, T],
-        vec![T, T, T, dark, dark, T, T, T],
-        vec![T, T, T, dark, dark, T, T, T],
-        vec![T, T, dark, T, T, dark, T, T],
-        vec![T, dark, T, T, T, T, dark, T],
+        vec![T, T, d, g, g, d, T, T],
+        vec![T, d, g, f1, g, g, d, T],
+        vec![d, g, g, g, f2, g, g, d],
+        vec![d, g, f2, g, g, g, g, d],
+        vec![T, d, g, g, g, f1, d, T],
+        vec![T, T, d, d, d, d, T, T],
+        vec![T, T, T, w, w, T, T, T],
+        vec![T, T, T, b, b, T, T, T],
     ]
 }
 
-fn monitor_sprite() -> SpriteData {
-    let frame: Pixel = (50, 50, 55, 255);
-    let screen: Pixel = (60, 120, 180, 255);
-    let stand: Pixel = (70, 70, 75, 255);
+fn well_sprite() -> SpriteData {
+    let s = STONE_GREY;
+    let d = DARK;
+    let w = WOOD;
 
     vec![
-        vec![frame, frame, frame, frame, frame, frame, frame, frame],
-        vec![frame, screen, screen, screen, screen, screen, screen, frame],
-        vec![frame, screen, screen, screen, screen, screen, screen, frame],
-        vec![frame, screen, screen, screen, screen, screen, screen, frame],
-        vec![frame, screen, screen, screen, screen, screen, screen, frame],
-        vec![frame, frame, frame, frame, frame, frame, frame, frame],
-        vec![T, T, T, stand, stand, T, T, T],
-        vec![T, T, stand, stand, stand, stand, T, T],
+        vec![T, w, w, w, w, w, w, T],
+        vec![T, T, T, w, w, T, T, T],
+        vec![T, s, s, d, d, s, s, T],
+        vec![s, s, d, d, d, d, s, s],
+        vec![s, s, d, d, d, d, s, s],
+        vec![T, s, s, d, d, s, s, T],
+        vec![T, s, s, s, s, s, s, T],
+        vec![T, T, s, s, s, s, T, T],
     ]
 }
 
-fn lamp_sprite() -> SpriteData {
-    let shade: Pixel = (200, 180, 120, 255);
-    let glow: Pixel = (255, 240, 180, 200);
-    let pole: Pixel = (100, 100, 105, 255);
-    let base: Pixel = (80, 80, 85, 255);
+fn mailbox_sprite(has_letter: bool) -> SpriteData {
+    let w = WOOD;
+    let b = DARK_BROWN;
+    let l = LIGHT;
+
+    let letter_pixel = if has_letter { l } else { b };
 
     vec![
-        vec![T, T, shade, shade, shade, shade, T, T],
-        vec![T, shade, shade, glow, glow, shade, shade, T],
-        vec![T, T, shade, shade, shade, shade, T, T],
-        vec![T, T, T, pole, pole, T, T, T],
-        vec![T, T, T, pole, pole, T, T, T],
-        vec![T, T, T, pole, pole, T, T, T],
-        vec![T, T, T, pole, pole, T, T, T],
-        vec![T, T, base, base, base, base, T, T],
+        vec![T, T, b, b, b, b, T, T],
+        vec![T, T, b, letter_pixel, letter_pixel, b, T, T],
+        vec![T, T, b, b, b, b, T, T],
+        vec![T, T, T, w, w, T, T, T],
+        vec![T, T, T, w, w, T, T, T],
+        vec![T, T, T, w, w, T, T, T],
+        vec![T, T, T, w, w, T, T, T],
+        vec![T, T, T, b, b, T, T, T],
+    ]
+}
+
+fn scarecrow_sprite() -> SpriteData {
+    let w = WOOD;
+    let h = WHEAT;
+    let b = DARK_BROWN;
+
+    vec![
+        vec![T, T, h, h, h, h, T, T],
+        vec![T, T, h, b, b, h, T, T],
+        vec![T, T, T, w, w, T, T, T],
+        vec![w, w, w, w, w, w, w, w],
+        vec![T, h, T, w, w, T, h, T],
+        vec![T, T, T, w, w, T, T, T],
+        vec![T, T, T, w, w, T, T, T],
+        vec![T, T, w, T, T, w, T, T],
+    ]
+}
+
+fn lantern_sprite() -> SpriteData {
+    let w = WOOD;
+    let g = WHEAT; // warm glow
+    let b = DARK_BROWN;
+
+    vec![
+        vec![T, T, T, b, b, T, T, T],
+        vec![T, T, b, g, g, b, T, T],
+        vec![T, T, b, g, g, b, T, T],
+        vec![T, T, T, b, b, T, T, T],
+        vec![T, T, T, w, w, T, T, T],
+        vec![T, T, T, w, w, T, T, T],
+        vec![T, T, T, w, w, T, T, T],
+        vec![T, T, b, b, b, b, T, T],
+    ]
+}
+
+fn cabin_wall_sprite() -> SpriteData {
+    let w = WOOD;
+    let b = DARK_BROWN;
+
+    vec![
+        vec![w, w, w, w, w, w, w, w],
+        vec![b, b, b, b, b, b, b, b],
+        vec![w, w, w, w, w, w, w, w],
+        vec![w, w, w, w, w, w, w, w],
+        vec![b, b, b, b, b, b, b, b],
+        vec![w, w, w, w, w, w, w, w],
+        vec![w, w, w, w, w, w, w, w],
+        vec![b, b, b, b, b, b, b, b],
+    ]
+}
+
+fn fence_h_sprite() -> SpriteData {
+    let w = WOOD;
+    let b = DARK_BROWN;
+
+    vec![
+        vec![T, T, T, T, T, T, T, T],
+        vec![T, T, T, T, T, T, T, T],
+        vec![w, w, w, w, w, w, w, w],
+        vec![b, b, b, b, b, b, b, b],
+        vec![T, T, T, T, T, T, T, T],
+        vec![w, w, w, w, w, w, w, w],
+        vec![b, b, b, b, b, b, b, b],
+        vec![T, T, T, T, T, T, T, T],
+    ]
+}
+
+fn fence_v_sprite() -> SpriteData {
+    let w = WOOD;
+    let b = DARK_BROWN;
+
+    vec![
+        vec![T, T, T, w, b, T, T, T],
+        vec![T, T, T, w, b, T, T, T],
+        vec![T, T, T, w, b, T, T, T],
+        vec![T, T, T, w, b, T, T, T],
+        vec![T, T, T, w, b, T, T, T],
+        vec![T, T, T, w, b, T, T, T],
+        vec![T, T, T, w, b, T, T, T],
+        vec![T, T, T, w, b, T, T, T],
+    ]
+}
+
+fn fishing_spot_sprite() -> SpriteData {
+    let w = WOOD;
+    let b = DARK_BROWN;
+    let wa = WATER_BLUE;
+    let wd = WATER_DARK;
+
+    vec![
+        vec![T, T, T, T, T, T, T, T],
+        vec![T, T, T, T, T, T, T, T],
+        vec![w, w, w, w, w, b, T, T],
+        vec![b, b, b, b, b, b, T, T],
+        vec![w, w, w, w, w, b, T, T],
+        vec![T, T, T, T, T, T, T, T],
+        vec![wa, wa, wd, wa, wa, wd, wa, wa],
+        vec![wd, wa, wa, wd, wa, wa, wd, wa],
     ]
 }
 
 fn default_furniture_sprite() -> SpriteData {
-    let c: Pixel = (120, 120, 130, 255);
-    let d: Pixel = (90, 90, 100, 255);
+    let c = STONE_GREY;
+    let d = DARK;
 
     vec![
         vec![T, T, c, c, c, c, T, T],
@@ -541,6 +739,118 @@ pub fn waiting_bubble() -> SpriteData {
     ]
 }
 
+/// Generate an 8x8 companion animal sprite.
+///
+/// Two-frame idle animation: frame 0 = normal, frame 1 = slight bob.
+pub fn companion_sprite(kind: CompanionKind, frame: u8) -> SpriteData {
+    match kind {
+        CompanionKind::Chicken => chicken_sprite(frame),
+        CompanionKind::Cat => cat_sprite(frame),
+        CompanionKind::Dog => dog_sprite(frame),
+    }
+}
+
+fn chicken_sprite(frame: u8) -> SpriteData {
+    let body: Pixel = (218, 212, 94, 255); // wheat/yellow
+    let wing: Pixel = (210, 170, 130, 255); // tan
+    let beak: Pixel = (210, 125, 44, 255); // orange
+    let eye: Pixel = (20, 12, 28, 255); // dark
+    let comb: Pixel = (172, 50, 50, 255); // red
+    let feet: Pixel = (210, 125, 44, 255); // orange
+
+    if frame.is_multiple_of(2) {
+        vec![
+            vec![T, T, T, comb, T, T, T, T],
+            vec![T, T, body, body, body, T, T, T],
+            vec![T, T, eye, body, body, T, T, T],
+            vec![T, beak, body, body, body, T, T, T],
+            vec![T, T, body, body, body, wing, T, T],
+            vec![T, T, body, body, body, T, T, T],
+            vec![T, T, T, feet, feet, T, T, T],
+            vec![T, T, feet, T, T, feet, T, T],
+        ]
+    } else {
+        // Bob up: shift body 1px up
+        vec![
+            vec![T, T, body, comb, body, T, T, T],
+            vec![T, T, eye, body, body, T, T, T],
+            vec![T, beak, body, body, body, T, T, T],
+            vec![T, T, body, body, body, wing, T, T],
+            vec![T, T, body, body, body, T, T, T],
+            vec![T, T, T, feet, feet, T, T, T],
+            vec![T, T, T, feet, feet, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+        ]
+    }
+}
+
+fn cat_sprite(frame: u8) -> SpriteData {
+    let body: Pixel = (130, 130, 140, 255); // grey
+    let dark: Pixel = (78, 74, 78, 255); // dark grey
+    let eye: Pixel = (109, 170, 44, 255); // green eyes
+    let nose: Pixel = (172, 50, 50, 255); // pink nose
+    let ear: Pixel = (130, 130, 140, 255);
+
+    if frame.is_multiple_of(2) {
+        vec![
+            vec![T, ear, T, T, T, ear, T, T],
+            vec![T, body, body, body, body, body, T, T],
+            vec![T, body, eye, body, eye, body, T, T],
+            vec![T, body, body, nose, body, body, T, T],
+            vec![T, T, body, body, body, body, T, T],
+            vec![T, T, body, body, body, body, dark, T],
+            vec![T, T, dark, T, T, dark, T, T],
+            vec![T, T, dark, T, T, dark, T, T],
+        ]
+    } else {
+        // Tail wag
+        vec![
+            vec![T, ear, T, T, T, ear, T, T],
+            vec![T, body, body, body, body, body, T, T],
+            vec![T, body, eye, body, eye, body, T, T],
+            vec![T, body, body, nose, body, body, T, T],
+            vec![T, T, body, body, body, body, T, T],
+            vec![T, T, body, body, body, body, T, dark],
+            vec![T, T, dark, T, T, dark, T, T],
+            vec![T, T, dark, T, T, dark, T, T],
+        ]
+    }
+}
+
+fn dog_sprite(frame: u8) -> SpriteData {
+    let body: Pixel = (133, 76, 48, 255); // brown
+    let light: Pixel = (210, 170, 130, 255); // tan belly
+    let eye: Pixel = (20, 12, 28, 255); // dark
+    let nose: Pixel = (20, 12, 28, 255);
+    let ear: Pixel = (68, 36, 52, 255); // dark brown ears
+    let tongue: Pixel = (172, 50, 50, 255); // red
+
+    if frame.is_multiple_of(2) {
+        vec![
+            vec![T, ear, body, body, body, ear, T, T],
+            vec![T, body, body, body, body, body, T, T],
+            vec![T, body, eye, body, eye, body, T, T],
+            vec![T, body, body, nose, body, body, T, T],
+            vec![T, T, body, body, tongue, T, T, T],
+            vec![T, T, body, light, body, body, T, T],
+            vec![T, T, body, T, T, body, T, T],
+            vec![T, T, body, T, T, body, T, T],
+        ]
+    } else {
+        // Pant: tongue out more
+        vec![
+            vec![T, ear, body, body, body, ear, T, T],
+            vec![T, body, body, body, body, body, T, T],
+            vec![T, body, eye, body, eye, body, T, T],
+            vec![T, body, body, nose, body, body, T, T],
+            vec![T, T, body, body, tongue, tongue, T, T],
+            vec![T, T, body, light, body, body, T, T],
+            vec![T, T, body, T, T, body, T, T],
+            vec![T, T, body, T, T, body, T, T],
+        ]
+    }
+}
+
 /// Create a white outline around opaque pixels in the sprite.
 ///
 /// Expands the sprite by 2px on all sides. Cardinal neighbors of opaque pixels
@@ -604,14 +914,14 @@ mod tests {
 
     #[test]
     fn floor_sprite_dimensions() {
-        let sprite = floor_sprite(TileType::Floor1);
+        let sprite = floor_sprite(TileType::Grass);
         assert_eq!(sprite.len(), 8);
         assert!(sprite.iter().all(|row| row.len() == 8));
     }
 
     #[test]
-    fn wall_sprite_dimensions() {
-        let sprite = wall_sprite(0b0000);
+    fn fence_sprite_dimensions() {
+        let sprite = fence_sprite(0b0000);
         assert_eq!(sprite.len(), 16);
         assert!(sprite.iter().all(|row| row.len() == 8));
     }
@@ -651,6 +961,54 @@ mod tests {
         for frame in 0..4 {
             let sprite = character_sprite(0, Direction::Down, AnimType::Walk, frame);
             assert_eq!(sprite.len(), 16);
+        }
+    }
+
+    #[test]
+    fn all_floor_types_produce_8x8() {
+        let tiles = [
+            TileType::Grass,
+            TileType::GrassDark,
+            TileType::Dirt,
+            TileType::DirtDark,
+            TileType::Water,
+            TileType::Sand,
+            TileType::Stone,
+            TileType::Fence,
+            TileType::Void,
+        ];
+        for tile in tiles {
+            let sprite = floor_sprite(tile);
+            assert_eq!(sprite.len(), 8);
+            assert!(sprite.iter().all(|row| row.len() == 8));
+        }
+    }
+
+    #[test]
+    fn all_farm_furniture_produce_8x8() {
+        let kinds = [
+            "CROP_PLOT",
+            "CROP_PLOT_ON",
+            "STUMP_FRONT",
+            "TREE",
+            "TREE_FRUIT",
+            "WELL",
+            "MAILBOX",
+            "MAILBOX_ON",
+            "SCARECROW",
+            "LANTERN",
+            "CABIN_WALL",
+            "FENCE_H",
+            "FENCE_V",
+            "FISHING_SPOT",
+        ];
+        for kind in kinds {
+            let sprite = furniture_sprite(kind);
+            assert_eq!(sprite.len(), 8, "furniture {kind} wrong height");
+            assert!(
+                sprite.iter().all(|row| row.len() == 8),
+                "furniture {kind} wrong width"
+            );
         }
     }
 }

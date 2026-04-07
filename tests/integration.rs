@@ -1,18 +1,18 @@
 use std::collections::{HashSet, VecDeque};
 
-use claude_pixel::engine::pathfind;
-use claude_pixel::engine::state::OfficeState;
-use claude_pixel::layout::persistence::default_layout;
-use claude_pixel::render::buffer::PixelBuffer;
-use claude_pixel::render::colorize::colorize_sprite;
-use claude_pixel::render::composer::{self, CharacterRender, FurnitureRender, SceneInput};
-use claude_pixel::types::{
+use harvest_claude::engine::pathfind;
+use harvest_claude::engine::state::OfficeState;
+use harvest_claude::layout::persistence::default_layout;
+use harvest_claude::render::buffer::PixelBuffer;
+use harvest_claude::render::colorize::colorize_sprite;
+use harvest_claude::render::composer::{self, CharacterRender, FurnitureRender, SceneInput};
+use harvest_claude::types::{
     AgentEvent, AgentStatus, AnimType, BubbleKind, CharState, Direction, OfficeLayout,
     PlacedFurniture, TileColor, TileType,
 };
-use claude_pixel::watcher::parser;
-use claude_pixel::watcher::registry::AgentRegistry;
-use claude_pixel::watcher::timer::TimerManager;
+use harvest_claude::watcher::parser;
+use harvest_claude::watcher::registry::AgentRegistry;
+use harvest_claude::watcher::timer::TimerManager;
 
 // =========================================================================
 // Helpers
@@ -25,27 +25,9 @@ fn layout_with_workstation() -> OfficeLayout {
         rows: 6,
         tiles: vec![1; 48],
         furniture: vec![
-            PlacedFurniture {
-                uid: "desk-1".to_owned(),
-                furniture_type: "DESK_FRONT".to_owned(),
-                col: 3,
-                row: 2,
-                color: None,
-            },
-            PlacedFurniture {
-                uid: "chair-1".to_owned(),
-                furniture_type: "WOODEN_CHAIR_BACK".to_owned(),
-                col: 3,
-                row: 3,
-                color: None,
-            },
-            PlacedFurniture {
-                uid: "chair-2".to_owned(),
-                furniture_type: "WOODEN_CHAIR_BACK".to_owned(),
-                col: 6,
-                row: 3,
-                color: None,
-            },
+            PlacedFurniture::new("crop-1", "CROP_PLOT", 3, 2),
+            PlacedFurniture::new("stump-1", "STUMP_BACK", 3, 3),
+            PlacedFurniture::new("stump-2", "STUMP_BACK", 6, 3),
         ],
         tile_colors: None,
         layout_revision: Some(1),
@@ -73,9 +55,9 @@ mod layout_engine {
         let layout = default_layout();
         let state = OfficeState::from_layout(layout);
 
-        assert_eq!(state.tile_map.len(), 11);
-        assert_eq!(state.tile_map[0].len(), 20);
-        assert!(!state.seats.is_empty(), "default layout has chairs");
+        assert_eq!(state.tile_map.len(), 16);
+        assert_eq!(state.tile_map[0].len(), 28);
+        assert!(!state.seats.is_empty(), "default layout has seats");
         assert!(
             !state.walkable.is_empty(),
             "default layout has walkable tiles"
@@ -134,9 +116,8 @@ mod layout_engine {
             !state.desk_z_by_tile.is_empty(),
             "desk_z_by_tile must have entries for desk positions"
         );
-        // Desk at (3,2) occupies (3,2) and (4,2)
+        // Crop plot at (3,2) is a 1x1 tile
         assert!(state.desk_z_by_tile.contains_key(&(3, 2)));
-        assert!(state.desk_z_by_tile.contains_key(&(4, 2)));
     }
 
     #[test]
@@ -401,7 +382,7 @@ mod render {
 
     #[test]
     fn compose_scene_with_empty_office() {
-        let tiles = vec![TileType::Floor1; 16];
+        let tiles = vec![TileType::Grass; 16];
         let mut buf = PixelBuffer::new(32, 32);
         let input = SceneInput {
             tile_map: &tiles,
@@ -418,7 +399,7 @@ mod render {
 
     #[test]
     fn compose_scene_with_character_has_nonzero_pixels() {
-        let tiles = vec![TileType::Floor1; 16];
+        let tiles = vec![TileType::Grass; 16];
         let chars = vec![CharacterRender {
             palette: 0,
             direction: Direction::Down,
@@ -427,6 +408,7 @@ mod render {
             pixel_x: 8,
             pixel_y: 8,
             bubble: None,
+            companions: vec![],
         }];
         let mut buf = PixelBuffer::new(64, 64);
         let input = SceneInput {
@@ -482,12 +464,13 @@ mod render {
 
     #[test]
     fn compose_scene_with_furniture_renders() {
-        let tiles = vec![TileType::Floor1; 16];
+        let tiles = vec![TileType::Grass; 16];
         let furniture = vec![FurnitureRender {
-            kind: "DESK_FRONT".to_owned(),
+            kind: "CROP_PLOT".to_owned(),
             col: 0,
             row: 0,
             color: None,
+            is_seat: false,
         }];
         let mut buf = PixelBuffer::new(64, 64);
         let input = SceneInput {
@@ -530,6 +513,7 @@ mod full_pipeline {
                 col: f.col,
                 row: f.row,
                 color: None,
+                is_seat: f.is_seat,
             })
             .collect();
 
@@ -546,6 +530,7 @@ mod full_pipeline {
                     pixel_x: ch.pos.0 as i16,
                     pixel_y: ch.pos.1 as i16,
                     bubble: None,
+                    companions: vec![],
                 }
             })
             .collect();

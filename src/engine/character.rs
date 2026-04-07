@@ -10,7 +10,7 @@ use crate::constants::{
 use crate::engine::matrix::MatrixEffect;
 use crate::engine::pathfind;
 use crate::engine::seat::Seat;
-use crate::types::{AnimType, BubbleKind, CharState, Direction, TilePos};
+use crate::types::{AnimType, BubbleKind, CharState, CompanionKind, Direction, TilePos};
 
 /// Walk animation frame cycle: 4 frames at 150ms.
 const WALK_CYCLE: [u8; 4] = [0, 1, 2, 1];
@@ -26,6 +26,24 @@ pub struct BubbleState {
     /// Countdown timer (for Waiting auto-fade). Unused for Permission.
     pub timer: f32,
 }
+
+/// Companion animal following a character (visualizes a sub-agent).
+#[derive(Debug, Clone)]
+pub struct Companion {
+    /// Tool ID of the background agent this companion represents.
+    pub tool_id: String,
+    /// Animal kind determines the sprite.
+    pub kind: CompanionKind,
+    /// Pixel offset from parent character position.
+    pub offset: (f32, f32),
+    /// Animation frame index (2-frame idle bob).
+    pub anim_frame: u8,
+    /// Animation frame timer accumulator.
+    pub anim_timer: f32,
+}
+
+/// Companion animation frame timing (ms).
+const COMPANION_FRAME_MS: f32 = 400.0;
 
 /// An agent character on the office grid with FSM-driven animation.
 #[derive(Debug, Clone)]
@@ -68,6 +86,8 @@ pub struct Character {
     pub bubble: Option<BubbleState>,
     /// Active matrix spawn/despawn effect, if any.
     pub matrix_effect: Option<MatrixEffect>,
+    /// Companion animals (from background sub-agents).
+    pub companions: Vec<Companion>,
 }
 
 impl Character {
@@ -98,6 +118,7 @@ impl Character {
             tool_name: None,
             bubble: None,
             matrix_effect: None,
+            companions: Vec::new(),
         }
     }
 
@@ -120,6 +141,15 @@ impl Character {
             && fx.update(dt_f32)
         {
             self.matrix_effect = None;
+        }
+
+        // Update companion animations
+        for comp in &mut self.companions {
+            comp.anim_timer += dt_f32 * 1000.0;
+            if comp.anim_timer >= COMPANION_FRAME_MS {
+                comp.anim_timer -= COMPANION_FRAME_MS;
+                comp.anim_frame = (comp.anim_frame + 1) % 2;
+            }
         }
 
         match self.state {
@@ -196,6 +226,34 @@ impl Character {
     /// Clear any active bubble.
     pub fn dismiss_bubble(&mut self) {
         self.bubble = None;
+    }
+
+    /// Spawn a companion animal for a background sub-agent.
+    pub fn add_companion(&mut self, tool_id: String, kind: CompanionKind) {
+        // Offset companions so they don't overlap
+        let idx = self.companions.len();
+        let offset_x = match idx % 3 {
+            0 => 10.0,
+            1 => -6.0,
+            _ => 12.0,
+        };
+        let offset_y = match idx % 3 {
+            0 => 4.0,
+            1 => 6.0,
+            _ => -2.0,
+        };
+        self.companions.push(Companion {
+            tool_id,
+            kind,
+            offset: (offset_x, offset_y),
+            anim_frame: 0,
+            anim_timer: 0.0,
+        });
+    }
+
+    /// Remove a companion by its tool ID (background agent finished).
+    pub fn remove_companion(&mut self, tool_id: &str) {
+        self.companions.retain(|c| c.tool_id != tool_id);
     }
 
     /// Current sprite lookup key: (direction, anim_type, frame).

@@ -6,15 +6,17 @@ use ratatui::layout::{Constraint, Layout};
 
 use crate::action::Action;
 use crate::cli::Args;
-use crate::constants::MAX_DELTA_TIME;
+use crate::constants::{MAX_AGENTS, MAX_DELTA_TIME};
 use crate::engine::pathfind;
 use crate::engine::state::OfficeState;
 use crate::event::EventHandler;
 use crate::layout::persistence;
 use crate::render::buffer::PixelBuffer;
-use crate::render::composer::{self, BubbleRender, CharacterRender, FurnitureRender, SceneInput};
+use crate::render::composer::{
+    self, BubbleRender, CharacterRender, CompanionRender, FurnitureRender, SceneInput,
+};
 use crate::tui::TerminalGuard;
-use crate::types::{AgentEvent, AgentStatus};
+use crate::types::{AgentEvent, AgentStatus, CompanionKind};
 use crate::ui::input;
 use crate::ui::status_bar::{SelectedInfo, StatusBar};
 use crate::watcher::registry::AgentRegistry;
@@ -29,6 +31,8 @@ pub struct App {
     timers: TimerManager,
     selected: Option<usize>,
     running: bool,
+    /// Render area origin in terminal cells (for mouse offset).
+    render_origin: (u16, u16),
 }
 
 impl App {
@@ -61,6 +65,7 @@ impl App {
             timers: TimerManager::new(),
             selected: None,
             running: true,
+            render_origin: (0, 0),
         })
     }
 
@@ -68,12 +73,15 @@ impl App {
     pub fn run(&mut self, terminal: &mut TerminalGuard) -> Result<()> {
         let events = EventHandler::new();
 
-        // Discover existing sessions
+        // Discover existing sessions (capped at MAX_AGENTS)
         let initial = self
             .scanner
             .initial_scan()
             .wrap_err("failed initial scan")?;
         for path in initial {
+            if self.office.characters.len() >= MAX_AGENTS {
+                break;
+            }
             if let Some((project_name, session_id)) = extract_session_info(&path)
                 && let Ok(id) = self.agents.add_agent(session_id, path, project_name)
             {
@@ -114,7 +122,9 @@ impl App {
                 project,
                 session_id,
             } => {
-                if let Ok(id) = self.agents.add_agent(session_id, path, project) {
+                if self.office.characters.len() < MAX_AGENTS
+                    && let Ok(id) = self.agents.add_agent(session_id, path, project)
+                {
                     let (palette, hue_shift) = self.agents.assign_palette();
                     self.office.add_character(id, palette, hue_shift);
                 }
@@ -169,7 +179,9 @@ impl App {
                     project_name,
                     session_id,
                 } => {
-                    if let Ok(id) = self.agents.add_agent(session_id, path, project_name) {
+                    if self.office.characters.len() < MAX_AGENTS
+                        && let Ok(id) = self.agents.add_agent(session_id, path, project_name)
+                    {
                         let (palette, hue_shift) = self.agents.assign_palette();
                         self.office.add_character(id, palette, hue_shift);
                     }
@@ -243,9 +255,17 @@ impl App {
                     ch.set_active(&tool_name, seat_pos, VecDeque::from(path));
                 }
             }
-            AgentEvent::ToolDone { tool_id } => {
+            AgentEvent::ToolDone { ref tool_id } => {
                 self.timers.cancel_permission(agent_id);
-                self.timers.delay_tool_done(agent_id, tool_id);
+                // Remove companion if this was a background agent
+                let is_bg = self
+                    .agents
+                    .get(agent_id)
+                    .is_some_and(|a| a.background_tool_ids.contains(tool_id));
+                if is_bg && let Some(ch) = self.office.character_by_agent_mut(agent_id) {
+                    ch.remove_companion(tool_id);
+                }
+                self.timers.delay_tool_done(agent_id, tool_id.clone());
             }
             AgentEvent::TurnEnd => {
                 if let Some(agent) = self.agents.get_mut(agent_id) {
@@ -270,14 +290,22 @@ impl App {
             AgentEvent::BashProgress { .. } => {
                 self.timers.restart_permission(agent_id);
             }
-            AgentEvent::BackgroundAgentDetected { tool_id } => {
+            AgentEvent::BackgroundAgentDetected { ref tool_id } => {
                 if let Some(agent) = self.agents.get_mut(agent_id) {
-                    agent.background_tool_ids.insert(tool_id);
+                    agent.background_tool_ids.insert(tool_id.clone());
+                }
+                // Spawn a companion animal for this background agent
+                let kind = pick_companion_kind(agent_id, tool_id);
+                if let Some(ch) = self.office.character_by_agent_mut(agent_id) {
+                    ch.add_companion(tool_id.clone(), kind);
                 }
             }
-            AgentEvent::SubAgentSpawn { .. }
-            | AgentEvent::SubAgentToolStart { .. }
-            | AgentEvent::SubAgentToolDone { .. } => {}
+            AgentEvent::SubAgentSpawn { .. } => {}
+            AgentEvent::SubAgentToolStart { .. } => {
+                // Short-term sub-agent activity: activate nearby crop plots
+                self.activate_nearby_crops(agent_id);
+            }
+            AgentEvent::SubAgentToolDone { .. } => {}
         }
     }
 
@@ -339,13 +367,45 @@ impl App {
     }
 
     fn on_mouse_click(&mut self, col: u16, row: u16) {
-        if let Some(action) = input::handle_mouse_click(&self.office, col, row, 0, 0) {
-            self.update(action);
+        let (ox, oy) = self.render_origin;
+        let Some(agent_id) = input::hit_test_character(&self.office, col, row, ox, oy) else {
+            return;
+        };
+
+        // If clicking the selected character's bubble, dismiss it
+        if self.selected == Some(agent_id)
+            && let Some(ch) = self.office.character_by_agent_mut(agent_id)
+            && ch.bubble.is_some()
+        {
+            ch.dismiss_bubble();
+            return;
+        }
+
+        // Select the clicked character
+        self.selected = Some(agent_id);
+    }
+
+    /// Activate nearby crop plots when a sub-agent tool runs (growth effect).
+    fn activate_nearby_crops(&mut self, agent_id: usize) {
+        let tile = match self.office.character_by_agent(agent_id) {
+            Some(ch) => ch.current_tile(),
+            None => return,
+        };
+        // Find crop plots within 3 tiles and switch to _ON
+        for furn in &mut self.office.furniture {
+            if furn.furniture_type != "CROP_PLOT" {
+                continue;
+            }
+            let dist = (furn.col as i32 - tile.0 as i32).unsigned_abs()
+                + (furn.row as i32 - tile.1 as i32).unsigned_abs();
+            if dist <= 3 {
+                furn.furniture_type = "CROP_PLOT_ON".to_owned();
+            }
         }
     }
 
     /// Compose scene + status bar.
-    fn render(&self, terminal: &mut TerminalGuard) -> Result<()> {
+    fn render(&mut self, terminal: &mut TerminalGuard) -> Result<()> {
         terminal
             .terminal
             .draw(|frame| {
@@ -353,6 +413,7 @@ impl App {
                 let chunks =
                     Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
                 let main_area = chunks[0];
+                self.render_origin = (main_area.x, main_area.y);
                 let status_area = chunks[1];
 
                 let buf_w = main_area.width;
@@ -374,6 +435,7 @@ impl App {
                         col: f.col,
                         row: f.row,
                         color: None,
+                        is_seat: f.is_seat,
                     })
                     .collect();
 
@@ -394,6 +456,16 @@ impl App {
                                 kind: b.kind,
                                 timer: b.timer,
                             }),
+                            companions: ch
+                                .companions
+                                .iter()
+                                .map(|c| CompanionRender {
+                                    kind: c.kind,
+                                    offset_x: c.offset.0,
+                                    offset_y: c.offset.1,
+                                    frame: c.anim_frame,
+                                })
+                                .collect(),
                         }
                     })
                     .collect();
@@ -458,6 +530,18 @@ impl App {
             })
             .wrap_err("render failed")?;
         Ok(())
+    }
+}
+
+/// Pick a companion animal kind based on agent/tool IDs for variety.
+fn pick_companion_kind(agent_id: usize, tool_id: &str) -> CompanionKind {
+    let hash = tool_id
+        .bytes()
+        .fold(agent_id, |acc, b| acc.wrapping_add(b as usize));
+    match hash % 3 {
+        0 => CompanionKind::Chicken,
+        1 => CompanionKind::Cat,
+        _ => CompanionKind::Dog,
     }
 }
 

@@ -8,9 +8,12 @@ use crate::constants::{SITTING_OFFSET_PX, TILE_SIZE};
 use crate::render::buffer::PixelBuffer;
 use crate::render::colorize::{adjust_sprite, colorize_sprite};
 use crate::render::sprites::{
-    character_outline, character_sprite, floor_sprite, furniture_sprite, status_bubble, wall_sprite,
+    character_outline, character_sprite, companion_sprite, fence_sprite, floor_sprite,
+    furniture_sprite, status_bubble,
 };
-use crate::types::{AnimType, BubbleKind, Direction, SpriteData, TileColor, TilePos, TileType};
+use crate::types::{
+    AnimType, BubbleKind, CompanionKind, Direction, SpriteData, TileColor, TilePos, TileType,
+};
 
 /// A sprite positioned in the scene with z-sort ordering.
 #[derive(Debug, Clone)]
@@ -87,9 +90,9 @@ pub fn render_tiles(
 
             match tile {
                 TileType::Void => {}
-                TileType::Wall => {
-                    let neighbors = wall_neighbors(tile_map, cols, rows, col, row);
-                    let sprite = wall_sprite(neighbors);
+                TileType::Fence => {
+                    let neighbors = fence_neighbors(tile_map, cols, rows, col, row);
+                    let sprite = fence_sprite(neighbors);
                     let sprite = apply_tile_color(sprite, (col, row), tile_colors);
                     buf.blit(&sprite, px, py);
                 }
@@ -127,8 +130,12 @@ pub(crate) fn collect_drawables(
             sprite
         };
 
-        let footprint_h: u16 = 1;
-        let z_y = (item.row as f32 + footprint_h as f32) * TILE_SIZE as f32;
+        // Seats render behind characters at the same row
+        let z_y = if item.is_seat {
+            item.row as f32 * TILE_SIZE as f32
+        } else {
+            (item.row as f32 + 1.0) * TILE_SIZE as f32
+        };
 
         drawables.push(Drawable {
             sprite,
@@ -178,6 +185,20 @@ pub(crate) fn collect_drawables(
             z_y,
             flipped,
         });
+
+        // Companion animal drawables (beside character)
+        for comp in &ch.companions {
+            let comp_sprite = companion_sprite(comp.kind, comp.frame);
+            let comp_x = px + comp.offset_x as i16;
+            let comp_y = py + 8 + comp.offset_y as i16; // below character's head
+            drawables.push(Drawable {
+                sprite: comp_sprite,
+                x: comp_x,
+                y: comp_y,
+                z_y: z_y + 0.05,
+                flipped: false,
+            });
+        }
 
         // Bubble drawable (above character head)
         if let Some(ref bubble) = ch.bubble {
@@ -231,6 +252,8 @@ pub struct FurnitureRender {
     pub row: i16,
     /// Optional HSL color adjustment.
     pub color: Option<TileColor>,
+    /// Seat furniture renders behind characters at the same row.
+    pub is_seat: bool,
 }
 
 /// Bubble render data.
@@ -240,6 +263,19 @@ pub struct BubbleRender {
     pub kind: BubbleKind,
     /// Remaining display time in seconds.
     pub timer: f32,
+}
+
+/// Companion animal render data.
+#[derive(Debug, Clone)]
+pub struct CompanionRender {
+    /// Animal kind.
+    pub kind: CompanionKind,
+    /// Pixel offset from parent character.
+    pub offset_x: f32,
+    /// Pixel offset from parent character.
+    pub offset_y: f32,
+    /// Animation frame (0 or 1).
+    pub frame: u8,
 }
 
 /// Character render data extracted from engine state.
@@ -259,13 +295,15 @@ pub struct CharacterRender {
     pub pixel_y: i16,
     /// Active speech bubble, if any.
     pub bubble: Option<BubbleRender>,
+    /// Companion animals following this character.
+    pub companions: Vec<CompanionRender>,
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-fn wall_neighbors(tile_map: &[TileType], cols: u16, rows: u16, col: u16, row: u16) -> u8 {
+fn fence_neighbors(tile_map: &[TileType], cols: u16, rows: u16, col: u16, row: u16) -> u8 {
     let mut mask = 0u8;
     let get = |c: u16, r: u16| -> Option<TileType> {
         if c < cols && r < rows {
@@ -277,16 +315,16 @@ fn wall_neighbors(tile_map: &[TileType], cols: u16, rows: u16, col: u16, row: u1
         }
     };
 
-    if row > 0 && get(col, row - 1) == Some(TileType::Wall) {
+    if row > 0 && get(col, row - 1) == Some(TileType::Fence) {
         mask |= 1;
     }
-    if get(col + 1, row) == Some(TileType::Wall) {
+    if get(col + 1, row) == Some(TileType::Fence) {
         mask |= 2;
     }
-    if get(col, row + 1) == Some(TileType::Wall) {
+    if get(col, row + 1) == Some(TileType::Fence) {
         mask |= 4;
     }
-    if col > 0 && get(col - 1, row) == Some(TileType::Wall) {
+    if col > 0 && get(col - 1, row) == Some(TileType::Fence) {
         mask |= 8;
     }
 
@@ -342,23 +380,23 @@ mod tests {
     }
 
     #[test]
-    fn wall_neighbors_isolated() {
-        let map = vec![TileType::Wall];
-        let mask = wall_neighbors(&map, 1, 1, 0, 0);
+    fn fence_neighbors_isolated() {
+        let map = vec![TileType::Fence];
+        let mask = fence_neighbors(&map, 1, 1, 0, 0);
         assert_eq!(mask, 0);
     }
 
     #[test]
-    fn wall_neighbors_surrounded() {
-        let map = vec![TileType::Wall; 9];
-        let mask = wall_neighbors(&map, 3, 3, 1, 1);
+    fn fence_neighbors_surrounded() {
+        let map = vec![TileType::Fence; 9];
+        let mask = fence_neighbors(&map, 3, 3, 1, 1);
         assert_eq!(mask, 0b1111);
     }
 
     #[test]
     fn compose_scene_runs_without_panic() {
         let mut buf = PixelBuffer::new(32, 32);
-        let tiles = vec![TileType::Floor1; 16];
+        let tiles = vec![TileType::Grass; 16];
         let input = SceneInput {
             tile_map: &tiles,
             cols: 4,
@@ -381,6 +419,7 @@ mod tests {
             pixel_x: 8,
             pixel_y: 8,
             bubble: None,
+            companions: vec![],
         }];
 
         let drawables = collect_drawables(&[], &chars, Some(0));
@@ -400,6 +439,7 @@ mod tests {
                 kind: BubbleKind::Permission,
                 timer: 1.0,
             }),
+            companions: vec![],
         }];
 
         let drawables = collect_drawables(&[], &chars, None);
@@ -416,6 +456,7 @@ mod tests {
             pixel_x: 8,
             pixel_y: 8,
             bubble: None,
+            companions: vec![],
         }];
 
         let drawables = collect_drawables(&[], &chars, None);

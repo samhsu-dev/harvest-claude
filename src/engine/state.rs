@@ -198,8 +198,14 @@ impl OfficeState {
     }
 
     /// Find the character index at a given tile (hit-test).
+    ///
+    /// Characters are 2 tiles tall, so this checks both the foot tile
+    /// and the tile above it.
     pub fn character_at_tile(&self, pos: TilePos) -> Option<usize> {
-        self.characters.iter().position(|c| c.current_tile() == pos)
+        self.characters.iter().position(|c| {
+            let foot = c.current_tile();
+            foot == pos || (pos.1 + 1 == foot.1 && pos.0 == foot.0)
+        })
     }
 
     fn random_walkable_tile(&self) -> TilePos {
@@ -388,15 +394,11 @@ mod tests {
         }
     }
 
-    fn layout_with_chair() -> OfficeLayout {
+    fn layout_with_seat() -> OfficeLayout {
         let mut layout = minimal_layout();
-        layout.furniture.push(PlacedFurniture {
-            uid: "chair1".to_owned(),
-            furniture_type: "WOODEN_CHAIR_FRONT".to_owned(),
-            col: 2,
-            row: 1,
-            color: None,
-        });
+        layout
+            .furniture
+            .push(PlacedFurniture::new("stump1", "STUMP_FRONT", 2, 1));
         layout
     }
 
@@ -415,7 +417,7 @@ mod tests {
 
     #[test]
     fn chair_creates_seat() {
-        let state = OfficeState::from_layout(layout_with_chair());
+        let state = OfficeState::from_layout(layout_with_seat());
         assert_eq!(state.seats.len(), 1);
         assert_eq!(state.seats[0].col, 2);
         assert_eq!(state.seats[0].row, 1);
@@ -423,14 +425,14 @@ mod tests {
 
     #[test]
     fn chair_tile_is_blocked() {
-        let state = OfficeState::from_layout(layout_with_chair());
+        let state = OfficeState::from_layout(layout_with_seat());
         assert!(state.blocked.contains(&(2, 1)));
         assert!(!state.walkable.contains(&(2, 1)));
     }
 
     #[test]
     fn add_and_remove_character() {
-        let mut state = OfficeState::from_layout(layout_with_chair());
+        let mut state = OfficeState::from_layout(layout_with_seat());
         let idx = state.add_character(42, 0, None);
         assert_eq!(state.characters.len(), 1);
         assert_eq!(state.characters[idx].agent_id, 42);
@@ -443,7 +445,7 @@ mod tests {
 
     #[test]
     fn find_free_seat_returns_unoccupied() {
-        let mut state = OfficeState::from_layout(layout_with_chair());
+        let mut state = OfficeState::from_layout(layout_with_seat());
         assert!(state.find_free_seat().is_some());
 
         state.add_character(1, 0, None);
@@ -461,20 +463,12 @@ mod tests {
     #[test]
     fn find_nearest_free_seat_by_distance() {
         let mut layout = minimal_layout();
-        layout.furniture.push(PlacedFurniture {
-            uid: "c1".to_owned(),
-            furniture_type: "WOODEN_CHAIR_FRONT".to_owned(),
-            col: 0,
-            row: 0,
-            color: None,
-        });
-        layout.furniture.push(PlacedFurniture {
-            uid: "c2".to_owned(),
-            furniture_type: "WOODEN_CHAIR_FRONT".to_owned(),
-            col: 3,
-            row: 2,
-            color: None,
-        });
+        layout
+            .furniture
+            .push(PlacedFurniture::new("s1", "STUMP_FRONT", 0, 0));
+        layout
+            .furniture
+            .push(PlacedFurniture::new("s2", "STUMP_FRONT", 3, 2));
 
         let state = OfficeState::from_layout(layout);
         let nearest = state.find_nearest_free_seat((3, 1));
