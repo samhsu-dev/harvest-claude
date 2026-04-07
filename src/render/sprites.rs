@@ -531,7 +531,7 @@ pub fn furniture_sprite(kind: &str) -> SpriteData {
     match kind {
         "CROP_PLOT" => crop_plot_sprite(false),
         "CROP_PLOT_ON" => crop_plot_sprite(true),
-        "STUMP_FRONT" => stump_front_sprite(),
+        "STUMP_FRONT" | "STUMP_BACK" | "STUMP_LEFT" | "STUMP_RIGHT" => stump_front_sprite(),
         "TREE" => tree_sprite(false),
         "TREE_FRUIT" => tree_sprite(true),
         "WELL" => well_sprite(),
@@ -1238,6 +1238,9 @@ mod tests {
             "CROP_PLOT",
             "CROP_PLOT_ON",
             "STUMP_FRONT",
+            "STUMP_BACK",
+            "STUMP_LEFT",
+            "STUMP_RIGHT",
             "TREE",
             "TREE_FRUIT",
             "WELL",

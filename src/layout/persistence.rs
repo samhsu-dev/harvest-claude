@@ -8,7 +8,7 @@ use crate::constants::{DEFAULT_COLS, DEFAULT_ROWS};
 use crate::types::{OfficeLayout, PlacedFurniture, TileColor, TileType};
 
 /// Current bundled layout revision. Layouts with a lower revision are replaced.
-const BUNDLED_REVISION: u32 = 5;
+const BUNDLED_REVISION: u32 = 6;
 
 /// Layout filename within the pixel-agents directory.
 const LAYOUT_FILENAME: &str = "layout.json";
@@ -288,12 +288,15 @@ pub fn default_layout() -> OfficeLayout {
         PlacedFurniture::new("bush-2", "BUSH", 1, 9),
         PlacedFurniture::new("bush-3", "BUSH", 8, 14),
         PlacedFurniture::new("bush-4", "BUSH", 14, 1),
-        // === Seats (STUMP_FRONT) — placed on grass, never on paths ===
-        PlacedFurniture::new("rest-1", "STUMP_FRONT", 6, 4), // near home
-        PlacedFurniture::new("rest-2", "STUMP_FRONT", 3, 4), // near home
-        PlacedFurniture::new("rest-3", "STUMP_FRONT", 17, 2), // crop field edge
-        PlacedFurniture::new("rest-4", "STUMP_FRONT", 19, 9), // near pond
-        PlacedFurniture::new("rest-5", "STUMP_FRONT", 4, 9), // orchard
+        // === Seats — oriented toward work areas for context animations ===
+        // Near crops (facing Right → detects CROP_PLOT → Farm anim)
+        PlacedFurniture::new("rest-1", "STUMP_RIGHT", 18, 1), // crop field row 1
+        PlacedFurniture::new("rest-2", "STUMP_RIGHT", 18, 3), // crop field row 3
+        // Near fruit trees (facing Up → detects TREE_FRUIT → Harvest anim)
+        PlacedFurniture::new("rest-3", "STUMP_BACK", 3, 7), // orchard tree-1
+        PlacedFurniture::new("rest-4", "STUMP_BACK", 7, 7), // orchard tree-3
+        // General rest spots (facing Down → default Type/Read anim)
+        PlacedFurniture::new("rest-5", "STUMP_FRONT", 6, 4), // near home
         PlacedFurniture::new("rest-6", "STUMP_FRONT", 12, 6), // meadow
         PlacedFurniture::new("rest-7", "STUMP_FRONT", 15, 10), // near path
         PlacedFurniture::new("rest-8", "STUMP_FRONT", 3, 14), // south meadow
