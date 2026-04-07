@@ -312,24 +312,35 @@ impl Character {
                 (self.direction, AnimType::Walk, WALK_CYCLE[cycle_idx])
             }
             CharState::Type => {
-                let anim = if let Some(wa) = self.work_anim {
-                    wa
-                } else if self.tool_name.as_deref().is_some_and(Self::is_reading_tool) {
-                    AnimType::Read
+                let anim = if self.work_anim == Some(AnimType::Fish) {
+                    // Fishing spots always override — location-specific activity
+                    AnimType::Fish
+                } else if let Some(tool) = &self.tool_name {
+                    Self::anim_for_tool(tool)
                 } else {
-                    AnimType::Type
+                    self.work_anim.unwrap_or(AnimType::Type)
                 };
                 (self.direction, anim, self.anim_frame % 2)
             }
         }
     }
 
+    /// Map a tool name to the corresponding farm animation.
+    ///
+    /// Write/Edit → Farm (planting), Read/Grep/Glob → Read,
+    /// Bash → Harvest (gathering output), default → Type.
+    pub fn anim_for_tool(tool_name: &str) -> AnimType {
+        match tool_name {
+            "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => AnimType::Farm,
+            "Read" | "Grep" | "Glob" | "WebFetch" | "WebSearch" => AnimType::Read,
+            "Bash" | "Execute" | "Terminal" => AnimType::Harvest,
+            _ => AnimType::Type,
+        }
+    }
+
     /// True if the tool name indicates a reading action.
     pub fn is_reading_tool(tool_name: &str) -> bool {
-        matches!(
-            tool_name,
-            "Read" | "Grep" | "Glob" | "WebFetch" | "WebSearch"
-        )
+        matches!(Self::anim_for_tool(tool_name), AnimType::Read)
     }
 
     /// Current tile position derived from pixel coordinates.
