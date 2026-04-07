@@ -2,7 +2,7 @@
 
 > Harvest Moon meets Claude Code — a pixel-art farm where your AI agents come to life.
 
-Terminal pixel-art visualizer that renders running [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents as animated characters in a Harvest Moon-style office scene.
+Terminal pixel-art visualizer that renders running [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents as animated farm characters in a Stardew Valley-inspired scene using the [Dawnbringer 16-color palette](https://lospec.com/palette-list/dawnbringer-16).
 
 ## Install
 
@@ -18,13 +18,13 @@ cargo install --path .
 harvest-claude
 ```
 
-Characters spawn automatically as Claude Code agents start working. Each agent becomes a pixel-art character that walks to a desk, types when executing tools, and shows speech bubbles for permission requests.
+Characters spawn automatically as Claude Code agents start working. Each agent becomes a farm worker who tends crops, rests in the cabin, fishes at the pond, or waits at the mailbox. Background sub-agents appear as companion animals (chickens, cats, dogs) following their parent character.
 
 ```sh
 # Watch additional directories for JSONL sessions
 harvest-claude --watch-dir /path/to/project
 
-# Use a custom office layout
+# Use a custom farm layout
 harvest-claude --layout ~/.pixel-agents/layout.json
 ```
 
@@ -52,14 +52,21 @@ Watches `~/.claude/projects/` for `.jsonl` transcript files. Each active session
 
 | State | Visual | Trigger |
 |-------|--------|---------|
-| Active | Typing animation at desk | Tool executing |
-| Idle | Wandering the office | No active tools |
-| Waiting | Standing still | Awaiting user input |
-| Permission | Amber "..." bubble | 7s without tool result |
+| Active | Farming animation at crop plot | Tool executing |
+| Idle | Wandering the farm | No active tools |
+| Waiting | Resting at cabin | Awaiting user input |
+| Permission | Amber "..." bubble at mailbox | 7s without tool result |
+
+### Sub-Agent Visualization
+
+| Sub-Agent Type | Visual |
+|----------------|--------|
+| Background agent | Companion animal (chicken/cat/dog) follows parent |
+| Short-term sub-agent | Nearby crop plots grow (CROP_PLOT_ON) |
 
 ### Rendering
 
-8×16 pixel sprites rendered via Unicode half-block characters (`▀`) with 24-bit color. Scene composited with z-sorting at ~60 FPS. Layout compatible with [pixel-agents](https://marketplace.visualstudio.com/items?itemName=anthropic.pixel-agents) VS Code extension (`~/.pixel-agents/layout.json`).
+8x8 tile and 8x16 character sprites rendered via Unicode half-block characters (`▀`) with 24-bit color. Scene composited with z-sorting at ~60 FPS. Default farm layout: 28x16 grid with crop field, cabin, pond, stone paths, and scattered trees. Layout compatible with [pixel-agents](https://marketplace.visualstudio.com/items?itemName=anthropic.pixel-agents) VS Code extension (`~/.pixel-agents/layout.json`).
 
 ## Documentation
 
