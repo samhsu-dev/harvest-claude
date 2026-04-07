@@ -1,0 +1,32 @@
+# Pixel Agents TUI
+
+> Standalone terminal application (Rust, ratatui) that renders running Claude Code agents as animated pixel-art characters in an interactive office using half-block Unicode rendering.
+
+Auto-detects Claude Code sessions by scanning `~/.claude/projects/` for active JSONL transcripts. View-only — no agent launching or terminal control. Renders a pixel-art office at 160×88 half-block resolution (8×8 tiles, 20×11 grid) with animated characters, furniture, and z-sorted depth. Distributable via `cargo install`.
+
+## Instructions for Agents
+
+- Read `docs/design.md` for type specifications and architecture.
+- Read `docs/impl.md` for Rust crate APIs and gotchas before writing integration code.
+- Use direct ratatui Buffer writes (not Canvas widget) for pixel rendering. `cell.set_symbol("▀")` + fg/bg for top/bottom pixel.
+- Use `crossterm::event::poll(Duration::from_millis(16))` for the game loop. No tokio.
+- Use `notify::recommended_watcher` + `std::sync::mpsc` for file watching on a separate thread.
+- Parse JSONL line-by-line with `serde_json::from_str::<Value>`. Buffer partial lines.
+- All sprites embedded as `const` arrays at compile time. No runtime asset loading.
+- Run `cargo clippy` and `cargo test` before considering any change complete.
+
+## Architecture
+
+- [App & Rendering](llms/app.md): Main loop, event handling, half-block pixel renderer.
+- [Game Engine](llms/engine.md): OfficeState, character FSM, z-sorted compositing, pathfinding.
+- [Agent Detection](llms/watcher.md): Directory scanning, JSONL tailing, agent lifecycle.
+- [Sprites & Assets](llms/sprites.md): Embedded sprite data, palettes, animation frames.
+
+## Data Model
+
+- [Layout Format](llms/layout.md): OfficeLayout schema, compatibility with webview version.
+- [JSONL Protocol](llms/jsonl.md): Claude Code transcript record types and parsing.
+
+## Optional
+
+- [Build & Distribution](llms/build.md): Cargo configuration, cross-compilation, release.

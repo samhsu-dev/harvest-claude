@@ -1,0 +1,628 @@
+# Pixel Agents TUI
+
+> Standalone terminal application (Rust, ratatui) that renders running Claude Code agents as animated pixel-art characters in an interactive office using half-block Unicode rendering.
+
+Auto-detects Claude Code sessions by scanning `~/.claude/projects/` for active JSONL transcripts. View-only — no agent launching or terminal control. Renders a pixel-art office at 160×88 half-block resolution (8×8 tiles, 20×11 grid) with animated characters, furniture, and z-sorted depth. Distributable via `cargo install`.
+
+## Instructions for Agents
+
+- Read `docs/design.md` for type specifications and architecture.
+- Read `docs/impl.md` for Rust crate APIs and gotchas before writing integration code.
+- Use direct ratatui Buffer writes (not Canvas widget) for pixel rendering. `cell.set_symbol("▀")` + fg/bg for top/bottom pixel.
+- Use `crossterm::event::poll(Duration::from_millis(16))` for the game loop. No tokio.
+- Use `notify::recommended_watcher` + `std::sync::mpsc` for file watching on a separate thread.
+- Parse JSONL line-by-line with `serde_json::from_str::<Value>`. Buffer partial lines.
+- All sprites embedded as `const` arrays at compile time. No runtime asset loading.
+- Run `cargo clippy` and `cargo test` before considering any change complete.
+
+## Architecture
+
+- [App & Rendering](llms/app.md): Main loop, event handling, half-block pixel renderer.
+- [Game Engine](llms/engine.md): OfficeState, character FSM, z-sorted compositing, pathfinding.
+- [Agent Detection](llms/watcher.md): Directory scanning, JSONL tailing, agent lifecycle.
+- [Sprites & Assets](llms/sprites.md): Embedded sprite data, palettes, animation frames.
+
+## Data Model
+
+- [Layout Format](llms/layout.md): OfficeLayout schema, compatibility with webview version.
+- [JSONL Protocol](llms/jsonl.md): Claude Code transcript record types and parsing.
+
+## Optional
+
+- [Build & Distribution](llms/build.md): Cargo configuration, cross-compilation, release.
+
+
+---
+
+# Referenced Documents
+
+## Source: llms/app.md
+
+# App & Rendering
+
+> Main loop, event handling, terminal setup, half-block pixel rendering to ratatui Buffer.
+
+## Quick Start
+
+```rust
+fn main() -> Result<()> {
+    color_eyre::install()?;
+    let mut terminal = ratatui::init();
+    crossterm::execute!(io::stdout(), EnableMouseCapture)?;
+    let mut app = App::new()?;
+    app.run(&mut terminal)?;
+    ratatui::restore();
+    Ok(())
+}
+```
+
+## Key Files
+
+| File | Responsibility |
+|------|---------------|
+| `src/main.rs` | CLI parsing, terminal setup/teardown, panic handler |
+| `src/app.rs` | App struct, game loop, event dispatch |
+| `src/renderer.rs` | PixelBuffer compositing, half-block Buffer writes |
+| `src/ui/status_bar.rs` | Bottom status bar widget |
+
+## Game Loop
+
+```rust
+loop {
+    terminal.draw(|frame| app.render(frame))?;
+    if crossterm::event::poll(Duration::from_millis(16))? {
+        match crossterm::event::read()? {
+            Event::Key(key) => app.handle_key(key),
+            Event::Mouse(mouse) => app.handle_mouse(mouse),
+            Event::Resize(w, h) => app.handle_resize(w, h),
+            _ => {}
+        }
+    }
+    app.update(dt);
+    if app.should_quit { break; }
+}
+```
+
+16ms poll = ~60fps. Rendering is diff-based (ratatui only writes changed cells).
+
+## Half-Block Pixel Rendering
+
+```rust
+// Each terminal cell = 2 vertical pixels
+fn render_pixel_pair(buf: &mut Buffer, col: u16, row: u16, top: Color, bottom: Color) {
+    if let Some(cell) = buf.cell_mut((col, row)) {
+        cell.set_symbol("▀");
+        cell.set_fg(top);
+        cell.set_bg(bottom);
+    }
+}
+```
+
+PixelBuffer (160×88 RGBA) → iterate rows by 2 → write half-block pairs to Buffer.
+
+## Mouse Mapping
+
+```
+cell (column, row) → pixel (column, row * 2)
+pixel (px, py) → tile (px / TILE_SIZE, py / TILE_SIZE)
+```
+
+Mouse precision: column-exact, row per-cell (cannot distinguish upper/lower half-block).
+
+## Gotchas
+
+- Always restore terminal on panic. Use `std::panic::set_hook` to call `ratatui::restore()`.
+- `Color::Rgb` requires `COLORTERM=truecolor`. macOS Terminal.app does NOT support it.
+- Minimum terminal size: 160 cols × 46 rows. Check on startup and resize events.
+
+
+---
+
+## Source: llms/engine.md
+
+# Game Engine
+
+> OfficeState, character FSM, z-sorted compositing to PixelBuffer, BFS pathfinding.
+
+## Quick Start
+
+```rust
+let layout = load_layout("~/.pixel-agents/layout.json")?;
+let mut state = OfficeState::from_layout(layout);
+state.add_character(agent_id, palette);
+// Each frame:
+state.update(dt);
+state.render(&mut pixel_buffer);
+```
+
+## Key Files
+
+| File | Responsibility |
+|------|---------------|
+| `src/engine/state.rs` | OfficeState: layout, characters, furniture, seats |
+| `src/engine/character.rs` | Character FSM (IDLE → WALK → TYPE), animation |
+| `src/engine/pathfind.rs` | BFS shortest path on walkable tiles |
+| `src/engine/sprite.rs` | SpriteData type, blit with alpha compositing |
+
+## OfficeState
+
+```rust
+struct OfficeState {
+    layout: OfficeLayout,
+    tile_map: Vec<Vec<TileType>>,
+    characters: Vec<Character>,
+    furniture: Vec<FurnitureInstance>,
+    seats: Vec<Seat>,
+    blocked: HashSet<(u16, u16)>,
+    walkable: Vec<(u16, u16)>,
+}
+```
+
+## Character FSM
+
+| State | Trigger | Behavior |
+|-------|---------|----------|
+| IDLE | No active tool | Wander randomly (BFS). After 3-6 moves, rest at seat 60-120s. |
+| WALK | Path exists | Lerp between tiles at 3 tiles/sec. 2 walk frames, 200ms each. |
+| TYPE | Tool active, at seat | Typing animation (Write/Edit/Bash) or reading (Read/Grep/Glob). 400ms/frame. |
+
+Directions: Down, Up, Right. Left = horizontally flipped Right sprite.
+
+## Z-Sorting
+
+All entities collected into a `Vec<Drawable>`, sorted by bottom-Y pixel coordinate:
+- Characters: `y + TILE_SIZE`.
+- Furniture: `(row + footprint_rows) * TILE_SIZE`.
+- Rendered back-to-front onto PixelBuffer via alpha-composited blit.
+
+## Sprite Compositing
+
+```rust
+fn blit(buf: &mut PixelBuffer, sprite: &SpriteData, x: i16, y: i16) {
+    for (sy, row) in sprite.pixels.iter().enumerate() {
+        for (sx, &(r, g, b, a)) in row.iter().enumerate() {
+            if a < 2 { continue; } // transparent
+            let px = x + sx as i16;
+            let py = y + sy as i16;
+            if px >= 0 && py >= 0 && (px as u16) < buf.width && (py as u16) < buf.height {
+                buf.set(px as u16, py as u16, (r, g, b, 255));
+            }
+        }
+    }
+}
+```
+
+## Gotchas
+
+- Delta time capped at 100ms to prevent teleporting after terminal unfocus.
+- Tile coordinates: `(col, row)` where col = x, row = y. Pixel coords: `(col * TILE_SIZE, row * TILE_SIZE)`.
+- 8×8 tiles (half of webview's 16×16). Character sprites 8×16 (half of webview's 16×32).
+- Wander uses BFS, not A*. Office grids are small enough that BFS is optimal.
+
+
+---
+
+## Source: llms/watcher.md
+
+# Agent Detection
+
+> Directory scanning, JSONL tailing, agent lifecycle management.
+
+## Quick Start
+
+```rust
+let scanner = DirectoryScanner::new(vec![
+    home.join(".claude/projects"),
+])?;
+let initial = scanner.initial_scan();
+for path in initial {
+    registry.add_agent(session_id_from(&path), path, project_name);
+}
+```
+
+## Key Files
+
+| File | Responsibility |
+|------|---------------|
+| `src/watcher/scanner.rs` | Directory watching via notify, JSONL file discovery |
+| `src/watcher/jsonl.rs` | JSONL file tailing, line parsing, offset tracking |
+| `src/watcher/registry.rs` | Agent create/remove, poll all readers |
+
+## Discovery Flow
+
+1. **Startup**: Scan all `~/.claude/projects/*/` directories.
+2. **Filter**: Keep `.jsonl` files with mtime < 10 minutes and size > 0 bytes.
+3. **Extract**: Session ID from filename (UUID), project name from parent directory.
+4. **Watch**: `notify::recommended_watcher` on `~/.claude/projects/` (recursive).
+5. **Ongoing**: New `.jsonl` files → new agent. Deleted/stale files → remove agent.
+
+## JSONL Tailing
+
+```rust
+fn read_new_lines(&mut self) -> Vec<JsonlRecord> {
+    let mut file = File::open(&self.path)?;
+    file.seek(SeekFrom::Start(self.offset))?;
+    let mut reader = BufReader::new(file);
+    let mut results = Vec::new();
+    loop {
+        let mut line = String::new();
+        let bytes = reader.read_line(&mut line)?;
+        if bytes == 0 { break; } // EOF
+        self.offset += bytes as u64;
+        if !line.ends_with('\n') {
+            self.line_buffer.push_str(&line); // partial line
+            break;
+        }
+        let full_line = if !self.line_buffer.is_empty() {
+            let mut full = std::mem::take(&mut self.line_buffer);
+            full.push_str(&line);
+            full
+        } else { line };
+        if let Some(record) = parse_line(&full_line) {
+            results.push(record);
+        }
+    }
+    results
+}
+```
+
+## Project Hash
+
+Claude Code stores transcripts at `~/.claude/projects/<hash>/` where hash = workspace path with special characters replaced by `-`.
+
+```rust
+fn hash_path(path: &str) -> String {
+    path.replace([':', '\\', '/'], "-")
+}
+// "/Users/yichao/Projects/foo" → "-Users-yichao-Projects-foo"
+```
+
+## Stale Agent Cleanup
+
+Every 30s, check all tracked agents:
+- JSONL file deleted from disk → remove agent.
+- File mtime > 10 minutes + no active tools → mark as stale (keep but dim character).
+
+## Gotchas
+
+- `notify` on macOS uses FSEvents. Reliable for file creation/modification.
+- JSONL lines can be split mid-write. Always buffer partial lines.
+- `/clear` in Claude creates a NEW JSONL file. Old file stops growing. Scanner detects new file via `notify::EventKind::Create`.
+- Multiple Claude sessions in same project dir = multiple JSONL files. Each gets its own agent.
+
+
+---
+
+## Source: llms/sprites.md
+
+# Sprites & Assets
+
+> Embedded sprite data, character palettes, animation frames, furniture tiles.
+
+## Sprite Format
+
+```rust
+type SpriteData = Vec<Vec<(u8, u8, u8, u8)>>; // rows × cols of RGBA pixels
+// (0, 0, 0, 0) = transparent
+```
+
+All sprites embedded at compile time via `const` arrays or `include_bytes!` + decode.
+
+## Character Sprites
+
+8×16 pixels (half of webview's 16×32). 6 palettes.
+
+```
+Frame layout per character:
+  Walk1  Walk2  Type1  Type2  Read1  Read2
+  8×16   8×16   8×16   8×16   8×16   8×16
+
+Direction rows:
+  Row 0: Down
+  Row 1: Up
+  Row 2: Right (Left = flipped at runtime)
+```
+
+Total per palette: 6 frames × 3 directions = 18 sprites of 8×16.
+
+## Palettes
+
+6 base colors (matching webview `CHARACTER_PALETTES`):
+
+| Index | Skin | Hair | Shirt |
+|-------|------|------|-------|
+| 0 | light | brown | blue |
+| 1 | light | black | red |
+| 2 | medium | brown | green |
+| 3 | dark | black | purple |
+| 4 | light | blonde | orange |
+| 5 | medium | red | teal |
+
+Beyond 6 agents: reuse palette with hue-shifted colors.
+
+## Furniture Sprites
+
+8×8 pixels per tile (half of webview's 16×16). Simplified from webview originals.
+
+| Category | Items | Notes |
+|----------|-------|-------|
+| Desks | desk_front, desk_side | Surface for typing animation |
+| Chairs | chair_front, chair_back | Seat derivation source |
+| Electronics | monitor, laptop | Auto-state (on when agent active) |
+| Plants | plant, cactus | Decorative |
+| Storage | bookshelf | Decorative |
+
+## Floor Tiles
+
+8×8 solid color blocks. 7 patterns simplified to flat colors:
+
+| Index | Default Color |
+|-------|--------------|
+| 0 | `#5a4a3a` (dark wood) |
+| 1 | `#6b5b4b` (light wood) |
+| 2 | `#4a5a6a` (blue tile) |
+| 3 | `#5a6a5a` (green tile) |
+| 4 | `#6a6a6a` (gray) |
+| 5 | `#5a5a4a` (beige) |
+| 6 | `#3a3a4a` (dark blue) |
+
+## Wall Tiles
+
+8×16 per tile (8 wide × 16 tall for 3D effect). Solid color with darker bottom edge.
+
+## Status Bubbles
+
+Text-based (not pixel sprites):
+- Permission: `[...]` in amber
+- Waiting: `[✓]` in green
+- Active tool: `[toolname]` in white
+
+## Gotchas
+
+- Sprites designed for 8×8 tile grid. Webview uses 16×16. Layout loading must halve coordinates.
+- Left-facing sprites = horizontal flip of right-facing. Flip at render time, not stored separately.
+- Alpha threshold: `a < 2` treated as transparent (matches webview's `PNG_ALPHA_THRESHOLD`).
+
+
+---
+
+## Source: llms/layout.md
+
+# Layout Format
+
+> OfficeLayout schema, tile types, persistence, compatibility with webview version.
+
+## Schema
+
+```rust
+struct OfficeLayout {
+    version: u8,           // Must be 1
+    cols: u16,             // Grid width in tiles
+    rows: u16,             // Grid height in tiles
+    tiles: Vec<TileType>,  // Flat row-major (len = cols × rows)
+    furniture: Vec<PlacedFurniture>,
+}
+
+struct PlacedFurniture {
+    uid: String,
+    furniture_type: String,  // Asset ID
+    col: i16,                // Can be negative (wall items)
+    row: i16,
+}
+
+enum TileType {
+    Void = 0,     // Transparent, non-walkable
+    Floor1 = 1,   // Walkable floor patterns 1-7
+    Floor2 = 2,
+    Floor3 = 3,
+    Floor4 = 4,
+    Floor5 = 5,
+    Floor6 = 6,
+    Floor7 = 7,
+    Wall = 100,   // Non-walkable wall
+}
+```
+
+## Persistence
+
+- File: `~/.pixel-agents/layout.json`.
+- Same format as webview version. JSON with `version`, `cols`, `rows`, `tiles`, `furniture` fields.
+- On first run: create default layout (20×11, basic office).
+- Atomic write: write to `.tmp`, rename over original.
+
+## Webview Compatibility
+
+The TUI version uses 8×8 tiles; the webview uses 16×16. Layouts are stored at tile-level (not pixel-level), so the same `layout.json` works for both. The TUI just renders each tile at half the pixel resolution.
+
+Furniture positions are tile-based, so they transfer directly. Visual fidelity differs but spatial layout is identical.
+
+## Default Layout
+
+```
+20 cols × 11 rows
+Row 0:    Wall × 20
+Row 1-2:  Floor + desks + chairs (workspace area)
+Row 3-9:  Floor + misc furniture
+Row 10:   Floor (walkway)
+```
+
+## Gotchas
+
+- `tiles` is a flat array, row-major. Index = `row * cols + col`.
+- Furniture `col`/`row` can be negative (wall-mounted items above the grid).
+- Grid max: 64×64. Default: 20×11.
+
+
+---
+
+## Source: llms/jsonl.md
+
+# JSONL Protocol
+
+> Claude Code transcript record types, parsing rules, agent status derivation.
+
+## File Location
+
+`~/.claude/projects/<hash>/<session-id>.jsonl`
+
+- `<hash>` = workspace path with `:`, `\`, `/` replaced by `-`.
+- `<session-id>` = UUID.
+- One file per Claude Code session. Append-only.
+
+## Record Types
+
+Each line is a self-contained JSON object with a `type` field.
+
+### assistant
+
+```json
+{"type": "assistant", "message": {"content": [
+  {"type": "tool_use", "id": "toolu_xxx", "name": "Read", "input": {...}},
+  {"type": "text", "text": "..."}
+]}}
+```
+
+- `tool_use` blocks → agent tool start. Extract `id` and `name`.
+- `thinking` blocks → ignored.
+
+### user
+
+```json
+{"type": "user", "message": {"content": [
+  {"type": "tool_result", "tool_use_id": "toolu_xxx", "content": "..."}
+]}}
+```
+
+- `tool_result` → agent tool done. Extract `tool_use_id`.
+- `content` can be string (text prompt) or array (tool results). Handle both.
+
+### system
+
+```json
+{"type": "system", "subtype": "turn_duration", "duration_ms": 1234}
+```
+
+- `subtype == "turn_duration"` → reliable turn-end signal (~98% of tool-using turns).
+- Clear all active tools on this record. Character → IDLE.
+- Never emitted for text-only turns. Use text-idle timer (5s) as fallback.
+
+### progress
+
+```json
+{"type": "progress", "data": {"type": "agent_progress", ...}}
+```
+
+- `data.type == "agent_progress"` → sub-agent tool activity.
+- `data.type == "bash_progress"` → long-running Bash output (confirms tool is executing).
+
+## Status Derivation
+
+```
+No active tools + no recent data (>5s)     → Idle
+Active tool_use without tool_result         → Active (typing/reading)
+Active tool_use for >7s without progress    → Permission (waiting for approval)
+system turn_duration received               → Waiting (turn complete, green checkmark)
+```
+
+## Tool Categorization
+
+| Animation | Tool Names |
+|-----------|-----------|
+| Typing | Write, Edit, Bash, Task, NotebookEdit |
+| Reading | Read, Grep, Glob, WebFetch, WebSearch |
+
+Unknown tools default to typing animation.
+
+## Gotchas
+
+- Partial lines at EOF: JSONL writes are not atomic. Buffer incomplete lines.
+- `/clear` creates a NEW JSONL file. Old file stops growing. Detect via `notify::EventKind::Create`.
+- `turn_duration` never emitted for text-only turns. Start a 5s idle timer when no tools are active and new user text arrives.
+- User prompt `content` can be string or array. Check type before accessing.
+
+
+---
+
+## Source: llms/build.md
+
+# Build & Distribution
+
+> Cargo configuration, cross-compilation, release packaging.
+
+## Build
+
+```bash
+cargo build                    # Debug build
+cargo build --release          # Optimized release build
+cargo clippy                   # Lint
+cargo test                     # Run tests
+cargo run                      # Run debug build
+cargo run --release             # Run release build
+```
+
+## Cargo.toml
+
+```toml
+[package]
+name = "pixel-agents-tui"
+version = "0.1.0"
+edition = "2024"
+description = "Pixel art office for your Claude Code agents — in the terminal"
+license = "MIT"
+repository = "https://github.com/user/pixel-agents-tui"
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+notify = "8.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+clap = { version = "4.6", features = ["derive"] }
+rand = "0.10"
+color-eyre = "0.6"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+```
+
+## Distribution
+
+| Method | Command | Requires |
+|--------|---------|----------|
+| crates.io | `cargo install pixel-agents-tui` | Rust toolchain |
+| cargo-binstall | `cargo binstall pixel-agents-tui` | cargo-binstall |
+| GitHub Releases | Download binary | Nothing |
+| Homebrew | `brew install pixel-agents-tui` | Homebrew |
+
+## Cross-Compilation
+
+```bash
+# macOS ARM → Linux x86_64
+cargo install cross
+cross build --release --target x86_64-unknown-linux-gnu
+
+# GitHub Actions matrix:
+# - x86_64-unknown-linux-gnu
+# - x86_64-apple-darwin
+# - aarch64-apple-darwin
+# - x86_64-pc-windows-msvc
+```
+
+## Binary Size
+
+With `lto = true`, `strip = true`, `codegen-units = 1`: ~5-8MB static binary. No runtime dependencies.
+
+## Gotchas
+
+- `cargo install` compiles from source (2-3 minutes). Publish pre-built binaries for fast installation.
+- `edition = "2024"` requires Rust 1.85+. Use `edition = "2021"` for wider compatibility.
+- Embedded sprites (`const` arrays) increase binary size by ~100KB. Negligible.
+
+
+---
+
