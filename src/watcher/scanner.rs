@@ -9,7 +9,8 @@ use color_eyre::eyre::{Result, WrapErr};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::constants::{
-    DISMISSED_COOLDOWN_SECS, EXTERNAL_THRESHOLD_SECS, GLOBAL_MIN_FILE_SIZE, STALE_THRESHOLD_SECS,
+    DISMISSED_COOLDOWN_SECS, DORMANT_THRESHOLD_SECS, EXTERNAL_THRESHOLD_SECS, GLOBAL_MIN_FILE_SIZE,
+    REMOVED_THRESHOLD_SECS, STALE_THRESHOLD_SECS,
 };
 
 /// Events emitted by the directory scanner.
@@ -21,7 +22,9 @@ pub enum ScanEvent {
         project_name: String,
         session_id: String,
     },
-    /// A previously tracked session went stale or disappeared.
+    /// A tracked session went dormant (no activity for DORMANT_THRESHOLD).
+    SessionDormant { path: PathBuf },
+    /// A tracked session is truly gone (no activity for REMOVED_THRESHOLD or deleted).
     SessionGone { path: PathBuf },
 }
 
@@ -33,9 +36,13 @@ pub struct DirectoryScanner {
     watcher: RecommendedWatcher,
     events_rx: Receiver<notify::Result<Event>>,
     known_files: HashMap<PathBuf, SystemTime>,
+    /// Files that went dormant (stale but not removed).
+    dormant_files: HashMap<PathBuf, SystemTime>,
     dismissed_files: HashMap<PathBuf, Instant>,
     clear_dismissed: HashSet<PathBuf>,
     active_threshold: Duration,
+    dormant_threshold: Duration,
+    removed_threshold: Duration,
     external_threshold: Duration,
     min_file_size: u64,
     pending_clear_files: HashSet<PathBuf>,
@@ -65,9 +72,12 @@ impl DirectoryScanner {
             watcher,
             events_rx: rx,
             known_files: HashMap::new(),
+            dormant_files: HashMap::new(),
             dismissed_files: HashMap::new(),
             clear_dismissed: HashSet::new(),
             active_threshold: Duration::from_secs(STALE_THRESHOLD_SECS),
+            dormant_threshold: Duration::from_secs(DORMANT_THRESHOLD_SECS),
+            removed_threshold: Duration::from_secs(REMOVED_THRESHOLD_SECS),
             external_threshold: Duration::from_secs(EXTERNAL_THRESHOLD_SECS),
             min_file_size: GLOBAL_MIN_FILE_SIZE,
             pending_clear_files: HashSet::new(),
@@ -120,7 +130,9 @@ impl DirectoryScanner {
             }
 
             if !path.exists() {
-                if self.known_files.remove(&path).is_some() {
+                if self.known_files.remove(&path).is_some()
+                    || self.dormant_files.remove(&path).is_some()
+                {
                     events.push(ScanEvent::SessionGone { path });
                 }
                 continue;
@@ -132,6 +144,19 @@ impl DirectoryScanner {
             };
 
             let mtime = meta.modified().unwrap_or(now);
+
+            // Wake up dormant files that become active again.
+            if self.dormant_files.remove(&path).is_some() {
+                self.known_files.insert(path.clone(), mtime);
+                if let Some((project_name, session_id)) = extract_session_info(&path) {
+                    events.push(ScanEvent::NewSession {
+                        path,
+                        project_name,
+                        session_id,
+                    });
+                }
+                continue;
+            }
 
             if !self.known_files.contains_key(&path) && meta.len() > 0 {
                 // Two-tick adoption for /clear files.
@@ -164,16 +189,30 @@ impl DirectoryScanner {
             }
         }
 
-        // Check for stale sessions.
-        let stale: Vec<PathBuf> = self
+        // Stage 1: active → dormant (after DORMANT_THRESHOLD).
+        let dormant: Vec<PathBuf> = self
             .known_files
             .iter()
-            .filter(|(_, mtime)| !is_within_threshold(**mtime, now, self.active_threshold))
+            .filter(|(_, mtime)| !is_within_threshold(**mtime, now, self.dormant_threshold))
             .map(|(path, _)| path.clone())
             .collect();
 
-        for path in stale {
-            self.known_files.remove(&path);
+        for path in dormant {
+            let mtime = self.known_files.remove(&path).unwrap_or(now);
+            self.dormant_files.insert(path.clone(), mtime);
+            events.push(ScanEvent::SessionDormant { path });
+        }
+
+        // Stage 2: dormant → removed (after REMOVED_THRESHOLD).
+        let removed: Vec<PathBuf> = self
+            .dormant_files
+            .iter()
+            .filter(|(_, mtime)| !is_within_threshold(**mtime, now, self.removed_threshold))
+            .map(|(path, _)| path.clone())
+            .collect();
+
+        for path in removed {
+            self.dormant_files.remove(&path);
             events.push(ScanEvent::SessionGone { path });
         }
 
@@ -183,12 +222,14 @@ impl DirectoryScanner {
     /// Mark a session path as dismissed with a cooldown period.
     pub fn dismiss(&mut self, path: &Path) {
         self.known_files.remove(path);
+        self.dormant_files.remove(path);
         self.dismissed_files.insert(path.to_owned(), Instant::now());
     }
 
     /// Permanently dismiss a /clear file.
     pub fn dismiss_clear(&mut self, path: &Path) {
         self.known_files.remove(path);
+        self.dormant_files.remove(path);
         self.clear_dismissed.insert(path.to_owned());
     }
 
@@ -289,9 +330,15 @@ fn extract_session_info(path: &Path) -> Option<(String, String)> {
     Some((project_name, session_id))
 }
 
-// Check if a path ends with .jsonl extension.
+// Check if a path ends with .jsonl extension and is not a sub-agent session.
+//
+// Sub-agent sessions live under `.../subagents/agent-*.jsonl` and should not
+// be treated as top-level sessions.
 fn is_jsonl_path(path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == "jsonl")
+        && !path
+            .components()
+            .any(|c| c.as_os_str().to_str().is_some_and(|s| s == "subagents"))
 }
 
 // Check if a SystemTime is within a threshold from now.

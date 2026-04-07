@@ -1,3 +1,4 @@
+pub mod focus;
 pub mod jsonl;
 pub mod parser;
 pub mod registry;

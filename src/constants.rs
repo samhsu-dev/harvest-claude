@@ -9,7 +9,7 @@ pub const MAX_ROWS: u16 = 64;
 pub const WALK_FRAME_MS: f32 = 150.0;
 pub const TYPE_FRAME_MS: f32 = 300.0;
 pub const WALK_SPEED: f32 = 3.0;
-pub const SITTING_OFFSET_PX: f32 = 3.0;
+pub const SITTING_OFFSET_PX: f32 = 1.0;
 
 /// Wander behavior ranges.
 pub const WANDER_PAUSE_MIN: f32 = 2.0;
@@ -33,6 +33,11 @@ pub const EXTERNAL_THRESHOLD_SECS: u64 = 120;
 pub const DISMISSED_COOLDOWN_SECS: u64 = 180;
 pub const CLEAR_IDLE_THRESHOLD_MS: u64 = 2_000;
 pub const GLOBAL_MIN_FILE_SIZE: u64 = 3_072;
+
+/// Dormancy: stale threshold triggers dormant state (agent enters building).
+/// Removed threshold triggers actual removal (agent truly gone).
+pub const DORMANT_THRESHOLD_SECS: u64 = 600; // 10 minutes → dormant
+pub const REMOVED_THRESHOLD_SECS: u64 = 7_200; // 2 hours → removed
 
 /// Agent limits.
 pub const MAX_AGENTS: usize = 8;

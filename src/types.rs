@@ -83,10 +83,14 @@ pub enum CharState {
 
 /// Animation type for sprite lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AnimType {
     Walk,
     Type,
     Read,
+    Fish,
+    Farm,
+    Harvest,
 }
 
 /// Agent status inferred from JSONL parsing and heuristic timers.
@@ -97,6 +101,8 @@ pub enum AgentStatus {
     Idle,
     Waiting,
     Permission,
+    /// Session file went stale — agent is inside a building, hidden from view.
+    Dormant,
 }
 
 /// Speech bubble kind.

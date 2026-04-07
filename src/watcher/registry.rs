@@ -174,6 +174,18 @@ impl AgentRegistry {
         &self.agents
     }
 
+    /// Check if a path is already registered as any agent (top-level or sub-agent).
+    pub fn has_path(&self, path: &std::path::Path) -> bool {
+        self.agents.iter().any(|a| a.jsonl_path == path)
+    }
+
+    /// Check if an agent ID belongs to a sub-agent (has a parent).
+    pub fn is_sub_agent(&self, id: usize) -> bool {
+        self.agents
+            .iter()
+            .any(|a| a.id == id && a.parent_id.is_some())
+    }
+
     /// Assign a palette index using least-used strategy.
     ///
     /// Returns `(palette_index, optional_hue_shift)`. A hue shift is provided
