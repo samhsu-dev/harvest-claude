@@ -3,7 +3,7 @@
 > Harvest Moon meets Claude Code — a pixel-art farm where your AI agents come to life.
 
 Terminal pixel-art visualizer that renders running [Claude Code](https://docs.anthropic.com/en/docs/claude-code) agents as animated farm characters in a Stardew Valley-inspired scene using the [Dawnbringer 16-color palette](https://lospec.com/palette-list/dawnbringer-16).
-
+![image](docs/assets/image.png)
 ## Install
 
 Requires Rust 1.85+ and a 24-bit color terminal (iTerm2, Kitty, WezTerm, Alacritty, Windows Terminal).
