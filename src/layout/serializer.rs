@@ -189,7 +189,7 @@ mod tests {
         // Walls are not walkable
         assert!(!walkable.contains(&(0, 0)));
         // Interior floor that is not blocked is walkable
-        assert!(walkable.contains(&(5, 5)));
+        assert!(walkable.contains(&(10, 8)));
     }
 
     #[test]
@@ -197,8 +197,8 @@ mod tests {
         let layout = default_layout();
         let instances = build_furniture(&layout);
         let desk_z = build_desk_z_map(&instances);
-        // crop-1 at (19,3) is a 1x1 crop plot
-        assert!(desk_z.contains_key(&(19, 3)));
+        // crop-1 at (20,1) is a 1x1 crop plot
+        assert!(desk_z.contains_key(&(20, 1)));
     }
 
     #[test]
