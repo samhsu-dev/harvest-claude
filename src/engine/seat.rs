@@ -1,5 +1,5 @@
 use crate::layout::furniture::FurnitureInstance;
-use crate::types::{Direction, TilePos, TileType};
+use crate::types::{AnimType, Direction, TilePos, TileType};
 
 /// A seat derived from chair furniture, assignable to an agent.
 #[derive(Debug, Clone)]
@@ -14,6 +14,8 @@ pub struct Seat {
     pub occupied_by: Option<usize>,
     /// UID of the furniture instance this seat belongs to.
     pub furniture_uid: String,
+    /// Animation override when an agent works at this seat.
+    pub work_anim: Option<AnimType>,
 }
 
 impl Seat {
@@ -50,17 +52,64 @@ pub fn derive_seats(furniture: &[FurnitureInstance], tile_map: &[Vec<TileType>])
                 .facing
                 .unwrap_or_else(|| facing_from_context(tile_pos, furniture));
 
+            let work_anim = work_anim_for_seat(&inst.furniture_type, tile_pos, facing, furniture);
+
             seats.push(Seat {
                 col,
                 row,
                 facing,
                 occupied_by: None,
                 furniture_uid: uid,
+                work_anim,
             });
         }
     }
 
     seats
+}
+
+/// Determine the work animation for a seat based on its furniture type and nearby furniture.
+///
+/// FISHING_SPOT → Fish, seats facing CROP_PLOT → Farm, seats facing TREE_FRUIT → Harvest.
+fn work_anim_for_seat(
+    furniture_type: &str,
+    pos: TilePos,
+    facing: Direction,
+    furniture: &[FurnitureInstance],
+) -> Option<AnimType> {
+    if furniture_type == "FISHING_SPOT" {
+        return Some(AnimType::Fish);
+    }
+
+    // Check tiles in the facing direction for crop plots or fruit trees
+    let (dc, dr) = match facing {
+        Direction::Up => (0i32, -1i32),
+        Direction::Down => (0, 1),
+        Direction::Left => (-1, 0),
+        Direction::Right => (1, 0),
+    };
+
+    for depth in 1..=3 {
+        let col = pos.0 as i32 + dc * depth;
+        let row = pos.1 as i32 + dr * depth;
+        if col < 0 || row < 0 {
+            break;
+        }
+        let check = (col as u16, row as u16);
+
+        for furn in furniture {
+            if !furn.footprint.contains(&check) {
+                continue;
+            }
+            match furn.furniture_type.as_str() {
+                "CROP_PLOT" | "CROP_PLOT_ON" => return Some(AnimType::Farm),
+                "TREE_FRUIT" => return Some(AnimType::Harvest),
+                _ => {}
+            }
+        }
+    }
+
+    None
 }
 
 /// Determine facing direction from context: chair orientation, adjacent desk, or default Down.
@@ -95,9 +144,9 @@ pub fn facing_from_context(pos: TilePos, furniture: &[FurnitureInstance]) -> Dir
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_seats, facing_from_context};
+    use super::{derive_seats, facing_from_context, work_anim_for_seat};
     use crate::layout::furniture::FurnitureInstance;
-    use crate::types::{Direction, TileType};
+    use crate::types::{AnimType, Direction, TileType};
 
     fn make_chair(uid: &str, col: i16, row: i16, facing: Direction) -> FurnitureInstance {
         FurnitureInstance {
@@ -154,5 +203,49 @@ mod tests {
     fn facing_defaults_to_down() {
         let facing = facing_from_context((5, 5), &[]);
         assert_eq!(facing, Direction::Down);
+    }
+
+    #[test]
+    fn fishing_spot_has_fish_anim() {
+        let anim = work_anim_for_seat("FISHING_SPOT", (5, 5), Direction::Down, &[]);
+        assert_eq!(anim, Some(AnimType::Fish));
+    }
+
+    #[test]
+    fn seat_facing_crop_has_farm_anim() {
+        let crop = FurnitureInstance {
+            uid: "crop".to_owned(),
+            furniture_type: "CROP_PLOT".to_owned(),
+            col: 5,
+            row: 6,
+            sprite: vec![],
+            footprint: vec![(5, 6)],
+            z_y: 0.0,
+            is_seat: false,
+            facing: None,
+            category: Some("desk".to_owned()),
+            mirrored: false,
+        };
+        let anim = work_anim_for_seat("STUMP_FRONT", (5, 5), Direction::Down, &[crop]);
+        assert_eq!(anim, Some(AnimType::Farm));
+    }
+
+    #[test]
+    fn seat_facing_fruit_tree_has_harvest_anim() {
+        let tree = FurnitureInstance {
+            uid: "tree".to_owned(),
+            furniture_type: "TREE_FRUIT".to_owned(),
+            col: 5,
+            row: 4,
+            sprite: vec![],
+            footprint: vec![(5, 4)],
+            z_y: 0.0,
+            is_seat: false,
+            facing: None,
+            category: Some("decor".to_owned()),
+            mirrored: false,
+        };
+        let anim = work_anim_for_seat("STUMP_FRONT", (5, 5), Direction::Up, &[tree]);
+        assert_eq!(anim, Some(AnimType::Harvest));
     }
 }

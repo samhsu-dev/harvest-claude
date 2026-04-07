@@ -54,6 +54,8 @@ pub struct Character {
     pub state: CharState,
     /// True when the agent has active tools running.
     pub is_active: bool,
+    /// True when the agent is dormant (inside building, hidden from view).
+    pub is_dormant: bool,
     /// Sub-tile pixel position (col_px, row_px).
     pub pos: (f32, f32),
     /// Current movement target tile.
@@ -88,6 +90,10 @@ pub struct Character {
     pub matrix_effect: Option<MatrixEffect>,
     /// Companion animals (from background sub-agents).
     pub companions: Vec<Companion>,
+    /// Animation override from seat furniture context (Fish, Farm, Harvest).
+    pub work_anim: Option<AnimType>,
+    /// Walk to HOME then become dormant.
+    pub pending_dormant: bool,
 }
 
 impl Character {
@@ -102,6 +108,7 @@ impl Character {
             agent_id,
             state: CharState::Idle,
             is_active: false,
+            is_dormant: false,
             pos: px,
             target: None,
             path: VecDeque::new(),
@@ -119,6 +126,8 @@ impl Character {
             bubble: None,
             matrix_effect: None,
             companions: Vec::new(),
+            work_anim: None,
+            pending_dormant: false,
         }
     }
 
@@ -228,6 +237,44 @@ impl Character {
         self.bubble = None;
     }
 
+    /// Enter dormant state: agent is idle inside a building, hidden from view.
+    pub fn set_dormant(&mut self) {
+        self.is_active = false;
+        self.is_dormant = true;
+        self.tool_name = None;
+        self.bubble = None;
+        self.companions.clear();
+        self.state = CharState::Idle;
+    }
+
+    /// Start walking to HOME, then become dormant on arrival.
+    pub fn start_dormant_walk(&mut self, path: VecDeque<TilePos>) {
+        self.pending_dormant = true;
+        self.is_active = false;
+        self.tool_name = None;
+        self.bubble = None;
+        if path.is_empty() {
+            self.set_dormant();
+            self.pending_dormant = false;
+            return;
+        }
+        self.path = path;
+        self.target = self.path.front().copied();
+        self.state = CharState::Walk;
+        self.anim_frame = 0;
+        self.anim_timer = 0.0;
+    }
+
+    /// Wake from dormant state: agent resumes at its seat or a walkable tile.
+    pub fn wake_from_dormant(&mut self) {
+        self.is_dormant = false;
+        self.state = CharState::Idle;
+        self.anim_frame = 0;
+        self.anim_timer = 0.0;
+        let mut rng = rand::rng();
+        self.wander_timer = rng.random_range(WANDER_PAUSE_MIN..WANDER_PAUSE_MAX);
+    }
+
     /// Spawn a companion animal for a background sub-agent.
     pub fn add_companion(&mut self, tool_id: String, kind: CompanionKind) {
         // Offset companions so they don't overlap
@@ -265,7 +312,9 @@ impl Character {
                 (self.direction, AnimType::Walk, WALK_CYCLE[cycle_idx])
             }
             CharState::Type => {
-                let anim = if self.tool_name.as_deref().is_some_and(Self::is_reading_tool) {
+                let anim = if let Some(wa) = self.work_anim {
+                    wa
+                } else if self.tool_name.as_deref().is_some_and(Self::is_reading_tool) {
                     AnimType::Read
                 } else {
                     AnimType::Type
@@ -409,6 +458,12 @@ impl Character {
     }
 
     fn arrive_at_destination(&mut self, seats: &[Seat]) {
+        if self.pending_dormant {
+            self.set_dormant();
+            self.pending_dormant = false;
+            return;
+        }
+
         if self.is_active {
             // At seat with active tool: start typing
             self.state = CharState::Type;

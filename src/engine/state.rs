@@ -75,6 +75,7 @@ impl OfficeState {
         if let Some(si) = seat_idx {
             self.seats[si].occupied_by = Some(agent_id);
             ch.direction = self.seats[si].facing;
+            ch.work_anim = self.seats[si].work_anim;
         }
 
         self.characters.push(ch);
@@ -198,13 +199,37 @@ impl OfficeState {
     }
 
     /// Find the character index at a given tile (hit-test).
-    ///
-    /// Characters are 2 tiles tall, so this checks both the foot tile
-    /// and the tile above it.
     pub fn character_at_tile(&self, pos: TilePos) -> Option<usize> {
-        self.characters.iter().position(|c| {
-            let foot = c.current_tile();
-            foot == pos || (pos.1 + 1 == foot.1 && pos.0 == foot.0)
+        self.characters.iter().position(|c| c.current_tile() == pos)
+    }
+
+    /// Find the nearest walkable tile adjacent to a furniture type.
+    pub fn find_near_furniture(&self, from: TilePos, kind: &str) -> Option<TilePos> {
+        let candidates: Vec<TilePos> = self
+            .furniture
+            .iter()
+            .filter(|f| f.furniture_type == kind)
+            .flat_map(|f| {
+                // Check tiles adjacent to furniture footprint
+                let mut adj = Vec::new();
+                for &fp in &f.footprint {
+                    for &(dx, dy) in &[(0i16, 1), (0, -1), (1, 0), (-1, 0)] {
+                        let nx = fp.0 as i16 + dx;
+                        let ny = fp.1 as i16 + dy;
+                        if nx >= 0 && ny >= 0 {
+                            let pos = (nx as u16, ny as u16);
+                            if self.walkable.contains(&pos) {
+                                adj.push(pos);
+                            }
+                        }
+                    }
+                }
+                adj
+            })
+            .collect();
+
+        candidates.into_iter().min_by_key(|&(c, r)| {
+            (c as i32 - from.0 as i32).unsigned_abs() + (r as i32 - from.1 as i32).unsigned_abs()
         })
     }
 
