@@ -1,6 +1,6 @@
 use color_eyre::eyre::Result;
 
 fn main() -> Result<()> {
-    claude_pixel::run()?;
+    harvest_claude::run()?;
     Ok(())
 }
