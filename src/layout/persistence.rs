@@ -10,7 +10,7 @@ use crate::types::{OfficeLayout, PlacedFurniture, TileColor, TileType};
 /// Current bundled layout revision. Layouts with a lower revision are replaced.
 const BUNDLED_REVISION: u32 = 10;
 
-/// Layout filename within the pixel-agents directory.
+/// Layout filename within the config directory.
 const LAYOUT_FILENAME: &str = "layout.json";
 
 // -----------------------------------------------------------------------
@@ -55,27 +55,27 @@ pub fn save_layout(path: &Path, layout: &OfficeLayout) -> Result<()> {
     Ok(())
 }
 
-/// Return the `~/.pixel-agents/` directory, creating it if it does not exist.
+/// Return the `~/.harvest-claude/` config directory, creating it if needed.
 ///
 /// # Errors
 /// Returns an error if the home directory cannot be determined or mkdir fails.
-pub fn pixel_agents_dir() -> Result<PathBuf> {
+pub fn config_dir() -> Result<PathBuf> {
     let home = dirs::home_dir()
         .ok_or_else(|| color_eyre::eyre::eyre!("cannot determine home directory"))?;
-    let dir = home.join(".pixel-agents");
+    let dir = home.join(".harvest-claude");
     if !dir.exists() {
         fs::create_dir_all(&dir).wrap_err_with(|| format!("failed to create {}", dir.display()))?;
     }
     Ok(dir)
 }
 
-/// Load the layout from `~/.pixel-agents/layout.json`, falling back to the
+/// Load the layout from `~/.harvest-claude/layout.json`, falling back to the
 /// bundled default if the file is missing or unreadable.
 ///
 /// # Errors
-/// Returns an error only if `pixel_agents_dir()` fails.
+/// Returns an error only if `config_dir()` fails.
 pub fn load_or_default() -> Result<OfficeLayout> {
-    let dir = pixel_agents_dir()?;
+    let dir = config_dir()?;
     let path = dir.join(LAYOUT_FILENAME);
     if path.exists() {
         match load_layout(&path) {
