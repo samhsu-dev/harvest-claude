@@ -10,7 +10,9 @@ use crate::constants::{
 use crate::engine::matrix::MatrixEffect;
 use crate::engine::pathfind;
 use crate::engine::seat::Seat;
-use crate::types::{AnimType, BubbleKind, CharState, CompanionKind, Direction, TilePos};
+use crate::types::{
+    AnimType, BubbleKind, CharState, CompanionKind, Direction, ProduceType, TilePos,
+};
 
 /// Walk animation frame cycle: 4 frames at 150ms.
 const WALK_CYCLE: [u8; 4] = [0, 1, 2, 1];
@@ -94,6 +96,8 @@ pub struct Character {
     pub work_anim: Option<AnimType>,
     /// Walk to HOME then become dormant.
     pub pending_dormant: bool,
+    /// Walk to BARN to deliver produce, then go idle.
+    pub pending_delivery: Option<ProduceType>,
 }
 
 impl Character {
@@ -128,6 +132,7 @@ impl Character {
             companions: Vec::new(),
             work_anim: None,
             pending_dormant: false,
+            pending_delivery: None,
         }
     }
 
@@ -263,6 +268,28 @@ impl Character {
         self.state = CharState::Walk;
         self.anim_frame = 0;
         self.anim_timer = 0.0;
+    }
+
+    /// Start walking to the barn to deliver produce. Returns false if no path.
+    pub fn start_delivery(&mut self, produce: ProduceType, path: VecDeque<TilePos>) -> bool {
+        if path.is_empty() {
+            // No path to barn: skip delivery, just go idle
+            return false;
+        }
+        self.pending_delivery = Some(produce);
+        self.is_active = false;
+        self.tool_name = None;
+        self.path = path;
+        self.target = self.path.front().copied();
+        self.state = CharState::Walk;
+        self.anim_frame = 0;
+        self.anim_timer = 0.0;
+        true
+    }
+
+    /// Returns and clears pending delivery (called by App on arrival at barn).
+    pub fn take_delivery(&mut self) -> Option<ProduceType> {
+        self.pending_delivery.take()
     }
 
     /// Wake from dormant state: agent resumes at its seat or a walkable tile.
@@ -472,6 +499,17 @@ impl Character {
         if self.pending_dormant {
             self.set_dormant();
             self.pending_dormant = false;
+            return;
+        }
+
+        // Delivery arrival: produce is consumed by App via take_delivery()
+        if self.pending_delivery.is_some() {
+            self.state = CharState::Idle;
+            self.anim_frame = 0;
+            self.anim_timer = 0.0;
+            let mut rng = rand::rng();
+            self.wander_timer = rng.random_range(WANDER_PAUSE_MIN..WANDER_PAUSE_MAX);
+            // pending_delivery stays set — App reads and clears it
             return;
         }
 

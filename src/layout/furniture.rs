@@ -44,6 +44,8 @@ pub fn furniture_footprint(kind: &str) -> Vec<(i16, i16)> {
         "CABIN_WALL" | "BARN_WALL" => vec![(0, 0)],
         // Home: 1x1
         "HOME" => vec![(0, 0)],
+        // Barn (warehouse): 1x1
+        "BARN" => vec![(0, 0)],
         // Animal pens: 1x1
         "CHICKEN_COOP" | "COW_PEN" => vec![(0, 0)],
         // Structures
@@ -51,6 +53,8 @@ pub fn furniture_footprint(kind: &str) -> Vec<(i16, i16)> {
         "MAILBOX" | "MAILBOX_ON" => vec![(0, 0)],
         "SCARECROW" => vec![(0, 0)],
         "LANTERN" | "FLOWER" | "BUSH" => vec![(0, 0)],
+        // Produce piles (rendered dynamically by warehouse count)
+        "WHEAT_PILE" | "FRUIT_BASKET" | "FISH_PILE" => vec![(0, 0)],
         "FENCE_H" | "FENCE_V" => vec![(0, 0)],
         // Unknown
         _ => vec![(0, 0)],
@@ -99,10 +103,9 @@ pub(crate) fn furniture_category(kind: &str) -> Option<String> {
         }
         "MAILBOX" | "MAILBOX_ON" => Some("electronics".to_owned()),
         "TREE" | "TREE_FRUIT" | "WELL" | "SCARECROW" | "LANTERN" | "CABIN_WALL" | "BARN_WALL"
-        | "FENCE_H" | "FENCE_V" | "FLOWER" | "BUSH" | "CHICKEN_COOP" | "COW_PEN" => {
-            Some("decor".to_owned())
-        }
-        "HOME" => Some("building".to_owned()),
+        | "FENCE_H" | "FENCE_V" | "FLOWER" | "BUSH" | "CHICKEN_COOP" | "COW_PEN" | "WHEAT_PILE"
+        | "FRUIT_BASKET" | "FISH_PILE" => Some("decor".to_owned()),
+        "HOME" | "BARN" => Some("building".to_owned()),
         _ => None,
     }
 }

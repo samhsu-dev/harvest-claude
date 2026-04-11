@@ -8,7 +8,7 @@ use crate::constants::{DEFAULT_COLS, DEFAULT_ROWS};
 use crate::types::{OfficeLayout, PlacedFurniture, TileColor, TileType};
 
 /// Current bundled layout revision. Layouts with a lower revision are replaced.
-const BUNDLED_REVISION: u32 = 11;
+const BUNDLED_REVISION: u32 = 14;
 
 /// Layout filename within the config directory.
 const LAYOUT_FILENAME: &str = "layout.json";
@@ -144,15 +144,16 @@ pub fn default_layout() -> OfficeLayout {
             set(&mut tiles, c, r, TileType::DirtDark);
         }
     }
-    // Path: home exit east, south through farm, branch to pond
-    for c in 5..=10 {
+    // Path: main east-west road from home to crop field area
+    for c in 5..=19 {
         set(&mut tiles, c, 3, TileType::Stone);
     }
-    for r in 4..=11 {
+    // North-south spine: connects main road down to animal pen and pond
+    for r in 4..=14 {
         set(&mut tiles, 10, r, TileType::Stone);
     }
-    // Short branch east toward pond
-    for c in 11..=14 {
+    // Pond branch: east from spine to pond shore
+    for c in 11..=19 {
         set(&mut tiles, c, 10, TileType::Stone);
     }
 
@@ -259,41 +260,50 @@ pub fn default_layout() -> OfficeLayout {
         PlacedFurniture::new("tree-4", "TREE", 2, 8),
         PlacedFurniture::new("tree-5", "TREE", 5, 8),
         PlacedFurniture::new("tree-6", "TREE", 8, 8),
-        // === Meadow trees (scattered) ===
-        PlacedFurniture::new("tree-7", "TREE", 12, 3),
+        // === Meadow trees (scattered, off paths) ===
+        PlacedFurniture::new("tree-7", "TREE", 13, 5),
         PlacedFurniture::new("tree-8", "TREE", 16, 7),
-        PlacedFurniture::new("tree-9", "TREE", 11, 10),
+        PlacedFurniture::new("tree-9", "TREE", 13, 12),
         PlacedFurniture::new("tree-10", "TREE", 17, 12),
-        // === Flowers (near features) ===
+        // === Flowers (near features, off paths) ===
         PlacedFurniture::new("flower-1", "FLOWER", 3, 3),
         PlacedFurniture::new("flower-2", "FLOWER", 7, 1),
         PlacedFurniture::new("flower-3", "FLOWER", 14, 5),
-        PlacedFurniture::new("flower-4", "FLOWER", 10, 8),
+        PlacedFurniture::new("flower-4", "FLOWER", 12, 8),
         PlacedFurniture::new("flower-5", "FLOWER", 16, 11),
         // === Bushes (fence edges) ===
         PlacedFurniture::new("bush-1", "BUSH", 1, 2),
         PlacedFurniture::new("bush-2", "BUSH", 1, 7),
         PlacedFurniture::new("bush-3", "BUSH", 1, 12),
         PlacedFurniture::new("bush-4", "BUSH", 26, 8),
-        // === Seats ===
+        // === Seats (off-path, near work areas) ===
         // Crop edge (facing Right → Farm)
         PlacedFurniture::new("rest-1", "STUMP_RIGHT", 20, 1),
         PlacedFurniture::new("rest-2", "STUMP_RIGHT", 20, 5),
         // Below fruit trees (facing Up → Harvest)
         PlacedFurniture::new("rest-3", "STUMP_BACK", 2, 6),
         PlacedFurniture::new("rest-4", "STUMP_BACK", 8, 6),
-        // Meadow rest (facing Down → Farm default)
-        PlacedFurniture::new("rest-5", "STUMP_FRONT", 7, 3),
-        PlacedFurniture::new("rest-6", "STUMP_FRONT", 12, 5),
-        PlacedFurniture::new("rest-7", "STUMP_FRONT", 15, 9),
-        PlacedFurniture::new("rest-8", "STUMP_FRONT", 10, 12),
+        // Orchard clearing (south of road, off-path)
+        PlacedFurniture::new("rest-5", "STUMP_FRONT", 4, 4),
+        // Meadow east (between barn and spine, off-path)
+        PlacedFurniture::new("rest-6", "STUMP_FRONT", 14, 7),
+        // East meadow (off all paths)
+        PlacedFurniture::new("rest-7", "STUMP_FRONT", 16, 9),
+        // Near animal pen entrance
+        PlacedFurniture::new("rest-8", "STUMP_FRONT", 8, 12),
         // === Fishing spots ===
         PlacedFurniture::new("fish-1", "FISHING_SPOT", 19, 12),
         PlacedFurniture::new("fish-2", "FISHING_SPOT", 21, 14),
-        // === Lanterns (along path and near buildings) ===
-        PlacedFurniture::new("lamp-1", "LANTERN", 7, 3), // home path
-        PlacedFurniture::new("lamp-2", "LANTERN", 10, 6), // mid spine
-        PlacedFurniture::new("lamp-3", "LANTERN", 10, 10), // pond junction
+        // === Barn / Warehouse (upper meadow) ===
+        PlacedFurniture::new("barn-1", "BARN", 15, 1),
+        // === Produce piles (below barn) ===
+        PlacedFurniture::new("wheat-pile", "WHEAT_PILE", 14, 2),
+        PlacedFurniture::new("fruit-basket", "FRUIT_BASKET", 15, 2),
+        PlacedFurniture::new("fish-pile", "FISH_PILE", 16, 2),
+        // === Lanterns (beside paths, not on them) ===
+        PlacedFurniture::new("lamp-1", "LANTERN", 9, 4), // road-spine corner
+        PlacedFurniture::new("lamp-2", "LANTERN", 11, 7), // beside spine
+        PlacedFurniture::new("lamp-3", "LANTERN", 11, 11), // beside pond junction
         PlacedFurniture::new("lamp-4", "LANTERN", 4, 12), // animal pen
     ];
 

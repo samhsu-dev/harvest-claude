@@ -10,6 +10,7 @@ use crate::cli::Args;
 use crate::constants::{MAX_AGENTS, MAX_DELTA_TIME};
 use crate::engine::pathfind;
 use crate::engine::state::OfficeState;
+use crate::engine::warehouse::{self, Warehouse, produce_for_anim};
 use crate::event::EventHandler;
 use crate::layout::persistence;
 use crate::render::buffer::PixelBuffer;
@@ -17,7 +18,7 @@ use crate::render::composer::{
     self, BubbleRender, CharacterRender, CompanionRender, FurnitureRender, SceneInput,
 };
 use crate::tui::TerminalGuard;
-use crate::types::{AgentEvent, AgentStatus, CompanionKind};
+use crate::types::{AgentEvent, AgentStatus, AnimType, CompanionKind, ProduceType};
 use crate::ui::input;
 use crate::ui::status_bar::{AgentSummary, SelectedInfo, StatusBar};
 use crate::watcher::focus;
@@ -31,6 +32,8 @@ pub struct App {
     agents: AgentRegistry,
     scanner: DirectoryScanner,
     timers: TimerManager,
+    warehouse: Warehouse,
+    config_dir: Option<std::path::PathBuf>,
     selected: Option<usize>,
     running: bool,
     /// Render area origin in terminal cells (for mouse offset).
@@ -60,11 +63,19 @@ impl App {
 
         let agents = AgentRegistry::new();
 
+        let config_dir = persistence::config_dir().ok();
+        let wh = config_dir
+            .as_ref()
+            .map(|d| warehouse::load_warehouse(d))
+            .unwrap_or_default();
+
         Ok(Self {
             office,
             agents,
             scanner,
             timers: TimerManager::new(),
+            warehouse: wh,
+            config_dir,
             selected: None,
             running: true,
             render_origin: (0, 0),
@@ -269,6 +280,9 @@ impl App {
             }
         }
 
+        // Check for delivery arrivals (characters that reached the barn)
+        self.collect_deliveries();
+
         self.office.update(dt);
     }
 
@@ -282,6 +296,12 @@ impl App {
                 }
                 if crate::watcher::parser::is_non_exempt_tool(&tool_name) {
                     self.timers.start_permission(agent_id);
+                }
+                // Wake dormant characters on new tool activity
+                if let Some(ch) = self.office.character_by_agent_mut(agent_id)
+                    && ch.is_dormant
+                {
+                    ch.wake_from_dormant();
                 }
                 // Compute path before mutable borrow of character
                 let seat_and_path = self.office.character_by_agent(agent_id).map(|ch| {
@@ -314,6 +334,11 @@ impl App {
                 self.timers.delay_tool_done(agent_id, tool_id.clone());
             }
             AgentEvent::TurnEnd => {
+                let had_tools = self
+                    .agents
+                    .get(agent_id)
+                    .is_some_and(|a| a.had_tools_in_turn);
+
                 if let Some(agent) = self.agents.get_mut(agent_id) {
                     let bg = agent.background_tool_ids.clone();
                     agent.active_tools.retain(|k, _| bg.contains(k));
@@ -321,7 +346,15 @@ impl App {
                     agent.status = AgentStatus::Waiting;
                 }
                 self.timers.cancel_all(agent_id);
-                if let Some(ch) = self.office.character_by_agent_mut(agent_id) {
+
+                // Determine produce from work animation, then deliver to barn
+                let delivered = if had_tools {
+                    self.start_barn_delivery(agent_id)
+                } else {
+                    false
+                };
+
+                if !delivered && let Some(ch) = self.office.character_by_agent_mut(agent_id) {
                     ch.set_idle();
                     ch.set_waiting();
                 }
@@ -469,6 +502,62 @@ impl App {
         }
     }
 
+    /// Determine produce type and start a delivery walk to the barn.
+    ///
+    /// Returns true if the character started walking to the barn.
+    fn start_barn_delivery(&mut self, agent_id: usize) -> bool {
+        let ch = match self.office.character_by_agent(agent_id) {
+            Some(ch) => ch,
+            None => return false,
+        };
+
+        // Determine produce from the seat's work_anim
+        let anim = ch.work_anim.unwrap_or(AnimType::Farm);
+        let Some(produce) = produce_for_anim(anim) else {
+            return false;
+        };
+
+        let from = ch.current_tile();
+        let barn_tile = self.office.find_near_furniture(from, "BARN");
+        let path = barn_tile
+            .and_then(|bt| pathfind::bfs(&self.office.walkable, from, bt, None))
+            .unwrap_or_default();
+
+        if let Some(ch) = self.office.character_by_agent_mut(agent_id) {
+            ch.set_idle();
+            ch.set_waiting();
+            ch.start_delivery(produce, VecDeque::from(path))
+        } else {
+            false
+        }
+    }
+
+    /// Check all characters for completed deliveries and deposit produce.
+    fn collect_deliveries(&mut self) {
+        let mut deposited = false;
+        for ch in &mut self.office.characters {
+            // Character arrived at barn (idle with pending_delivery)
+            if ch.state == crate::types::CharState::Idle
+                && let Some(produce) = ch.take_delivery()
+            {
+                self.warehouse.add(produce);
+                deposited = true;
+            }
+        }
+        if deposited {
+            self.save_warehouse();
+        }
+    }
+
+    /// Persist warehouse to disk.
+    fn save_warehouse(&self) {
+        if let Some(ref dir) = self.config_dir
+            && let Err(e) = warehouse::save_warehouse(dir, &self.warehouse)
+        {
+            tracing::warn!("failed to save warehouse: {e}");
+        }
+    }
+
     /// Activate nearby crop plots when a sub-agent tool runs (growth effect).
     fn activate_nearby_crops(&mut self, agent_id: usize) {
         let tile = match self.office.character_by_agent(agent_id) {
@@ -510,16 +599,21 @@ impl App {
                 let tile_map_flat: Vec<_> =
                     self.office.tile_map.iter().flatten().copied().collect();
 
+                let wh = &self.warehouse;
                 let furniture_render: Vec<FurnitureRender> = self
                     .office
                     .furniture
                     .iter()
-                    .map(|f| FurnitureRender {
-                        kind: f.furniture_type.clone(),
-                        col: f.col,
-                        row: f.row,
-                        color: None,
-                        is_seat: f.is_seat,
+                    .map(|f| {
+                        let tier = produce_tier(&f.furniture_type, wh);
+                        FurnitureRender {
+                            kind: f.furniture_type.clone(),
+                            col: f.col,
+                            row: f.row,
+                            color: None,
+                            is_seat: f.is_seat,
+                            tier,
+                        }
                     })
                     .collect();
 
@@ -654,9 +748,16 @@ impl App {
                     })
                 });
 
+                let produce = crate::ui::status_bar::ProduceCounts {
+                    wheat: self.warehouse.count(ProduceType::Wheat),
+                    fruit: self.warehouse.count(ProduceType::Fruit),
+                    fish: self.warehouse.count(ProduceType::Fish),
+                };
+
                 let status = StatusBar {
                     agents: agent_summaries,
                     selected_info,
+                    produce,
                 };
 
                 frame.render_widget(&status, status_area);
@@ -712,6 +813,16 @@ fn short_label(project_name: &str) -> String {
         format!("{}…", &label[..7])
     } else {
         label.to_owned()
+    }
+}
+
+/// Map a produce furniture type to its warehouse tier for rendering.
+fn produce_tier(furniture_type: &str, wh: &Warehouse) -> u8 {
+    match furniture_type {
+        "WHEAT_PILE" => wh.tier(ProduceType::Wheat),
+        "FRUIT_BASKET" => wh.tier(ProduceType::Fruit),
+        "FISH_PILE" => wh.tier(ProduceType::Fish),
+        _ => 0,
     }
 }
 

@@ -9,7 +9,7 @@ use crate::render::buffer::PixelBuffer;
 use crate::render::colorize::{adjust_sprite, colorize_sprite};
 use crate::render::sprites::{
     character_outline, character_sprite, companion_sprite, fence_sprite, floor_sprite,
-    furniture_sprite, status_bubble,
+    furniture_sprite, produce_sprite, status_bubble,
 };
 use crate::types::{
     AnimType, BubbleKind, CompanionKind, Direction, SpriteData, TileColor, TilePos, TileType,
@@ -122,7 +122,11 @@ pub(crate) fn collect_drawables(
 
     // Furniture drawables
     for item in furniture {
-        let sprite = furniture_sprite(&item.kind);
+        let sprite = if is_produce_kind(&item.kind) {
+            produce_sprite(&item.kind, item.tier)
+        } else {
+            furniture_sprite(&item.kind)
+        };
         let sprite = if let Some(ref color) = item.color {
             adjust_sprite(&sprite, color)
         } else {
@@ -253,6 +257,8 @@ pub struct FurnitureRender {
     pub color: Option<TileColor>,
     /// Seat furniture renders behind characters at the same row.
     pub is_seat: bool,
+    /// Produce pile tier (0=empty, 1-3 for visual size). Only used for produce types.
+    pub tier: u8,
 }
 
 /// Bubble render data.
@@ -328,6 +334,10 @@ fn fence_neighbors(tile_map: &[TileType], cols: u16, rows: u16, col: u16, row: u
     }
 
     mask
+}
+
+fn is_produce_kind(kind: &str) -> bool {
+    matches!(kind, "WHEAT_PILE" | "FRUIT_BASKET" | "FISH_PILE")
 }
 
 fn apply_tile_color(

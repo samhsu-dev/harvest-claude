@@ -549,6 +549,8 @@ pub fn furniture_sprite(kind: &str) -> SpriteData {
         "HOME" => home_sprite(),
         "CHICKEN_COOP" => chicken_coop_sprite(),
         "COW_PEN" => cow_pen_sprite(),
+        "BARN" => barn_sprite(),
+        "WHEAT_PILE" | "FRUIT_BASKET" | "FISH_PILE" => produce_sprite(kind, 0),
         _ => default_furniture_sprite(),
     }
 }
@@ -869,6 +871,158 @@ fn cow_pen_sprite() -> SpriteData {
         vec![w, b, w, b, w, b, w, b],
         vec![T, T, T, T, T, T, T, T],
     ]
+}
+
+fn barn_sprite() -> SpriteData {
+    let w = WOOD;
+    let b = DARK_BROWN;
+    let r = WARM_RED;
+    let l = LIGHT;
+
+    vec![
+        vec![T, T, r, r, r, r, T, T],
+        vec![T, r, r, r, r, r, r, T],
+        vec![r, r, r, r, r, r, r, r],
+        vec![b, w, w, l, l, w, w, b],
+        vec![b, w, w, l, l, w, w, b],
+        vec![b, w, w, b, b, w, w, b],
+        vec![b, b, b, b, b, b, b, b],
+        vec![T, T, T, T, T, T, T, T],
+    ]
+}
+
+/// Produce pile sprite with tier-based rendering.
+///
+/// Tier 0: empty (transparent), 1: small pile, 2: medium, 3: large/full.
+pub fn produce_sprite(kind: &str, tier: u8) -> SpriteData {
+    if tier == 0 {
+        return vec![vec![T; 8]; 8];
+    }
+    match kind {
+        "WHEAT_PILE" => wheat_pile_sprite(tier),
+        "FRUIT_BASKET" => fruit_basket_sprite(tier),
+        "FISH_PILE" => fish_pile_sprite(tier),
+        _ => vec![vec![T; 8]; 8],
+    }
+}
+
+fn wheat_pile_sprite(tier: u8) -> SpriteData {
+    let w = WHEAT;
+    let d = WOOD;
+    let b = DARK_BROWN;
+
+    match tier {
+        1 => vec![
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, w, T, T, T, T],
+            vec![T, T, w, w, w, T, T, T],
+            vec![T, T, d, d, d, T, T, T],
+        ],
+        2 => vec![
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, w, T, T, T, T],
+            vec![T, T, w, w, w, T, T, T],
+            vec![T, w, w, w, w, w, T, T],
+            vec![T, d, d, d, d, d, T, T],
+            vec![T, b, b, b, b, b, T, T],
+        ],
+        _ => vec![
+            vec![T, T, T, w, T, T, T, T],
+            vec![T, T, w, w, w, T, T, T],
+            vec![T, T, w, w, w, w, T, T],
+            vec![T, w, w, w, w, w, T, T],
+            vec![T, w, w, w, w, w, w, T],
+            vec![w, w, d, w, d, w, w, w],
+            vec![d, d, d, d, d, d, d, d],
+            vec![b, b, b, b, b, b, b, b],
+        ],
+    }
+}
+
+fn fruit_basket_sprite(tier: u8) -> SpriteData {
+    let r = WARM_RED;
+    let g = GRASS_GREEN;
+    let w = WOOD;
+    let b = DARK_BROWN;
+
+    match tier {
+        1 => vec![
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, r, T, T, T, T],
+            vec![T, T, b, w, b, T, T, T],
+            vec![T, T, b, w, b, T, T, T],
+            vec![T, T, T, b, T, T, T, T],
+        ],
+        2 => vec![
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, r, T, T, T, T],
+            vec![T, T, r, g, r, T, T, T],
+            vec![T, T, r, r, g, T, T, T],
+            vec![T, b, w, w, w, b, T, T],
+            vec![T, T, b, w, b, T, T, T],
+            vec![T, T, T, b, T, T, T, T],
+        ],
+        _ => vec![
+            vec![T, T, T, r, T, T, T, T],
+            vec![T, T, r, g, r, T, T, T],
+            vec![T, r, g, r, r, g, T, T],
+            vec![T, r, r, g, r, r, T, T],
+            vec![T, g, r, r, g, r, T, T],
+            vec![b, w, w, w, w, w, b, T],
+            vec![T, b, w, w, w, b, T, T],
+            vec![T, T, b, b, b, T, T, T],
+        ],
+    }
+}
+
+fn fish_pile_sprite(tier: u8) -> SpriteData {
+    let f = WATER_BLUE;
+    let d = WATER_DARK;
+    let s = STONE_GREY;
+    let l = LIGHT;
+
+    match tier {
+        1 => vec![
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, d, f, f, T, T, T],
+            vec![T, T, f, l, f, d, T, T],
+            vec![T, T, T, s, s, T, T, T],
+        ],
+        2 => vec![
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, T, T, T, T, T, T],
+            vec![T, T, d, f, f, T, T, T],
+            vec![T, T, f, l, f, d, T, T],
+            vec![T, d, f, f, f, f, T, T],
+            vec![T, f, l, f, l, f, d, T],
+            vec![T, T, s, s, s, s, T, T],
+        ],
+        _ => vec![
+            vec![T, T, d, f, f, T, T, T],
+            vec![T, T, f, l, f, d, T, T],
+            vec![T, d, f, f, f, f, T, T],
+            vec![T, f, l, f, l, f, d, T],
+            vec![d, f, f, d, f, f, f, T],
+            vec![f, l, f, f, l, f, f, d],
+            vec![f, f, f, f, f, f, f, f],
+            vec![T, s, s, s, s, s, s, T],
+        ],
+    }
 }
 
 fn default_furniture_sprite() -> SpriteData {

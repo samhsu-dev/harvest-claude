@@ -31,6 +31,14 @@ pub struct SelectedInfo {
     pub tool_name: Option<String>,
 }
 
+/// Warehouse produce counts for status bar display.
+#[derive(Debug, Clone, Default)]
+pub struct ProduceCounts {
+    pub wheat: u32,
+    pub fruit: u32,
+    pub fish: u32,
+}
+
 /// Bottom status bar showing per-agent summaries, selection details, and keybindings.
 #[derive(Debug, Clone)]
 pub struct StatusBar {
@@ -38,6 +46,8 @@ pub struct StatusBar {
     pub agents: Vec<AgentSummary>,
     /// Info for the selected agent, if any.
     pub selected_info: Option<SelectedInfo>,
+    /// Warehouse produce counts.
+    pub produce: ProduceCounts,
 }
 
 impl StatusBar {
@@ -80,10 +90,24 @@ impl StatusBar {
     }
 
     fn right_spans(&self) -> Vec<Span<'static>> {
-        vec![Span::styled(
+        let total = self.produce.wheat + self.produce.fruit + self.produce.fish;
+        let mut spans = Vec::new();
+
+        if total > 0 {
+            spans.push(Span::styled(
+                format!(
+                    "W:{} F:{} f:{} ",
+                    self.produce.wheat, self.produce.fruit, self.produce.fish
+                ),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+
+        spans.push(Span::styled(
             "q:quit  ←→:select  esc:deselect ",
             Style::default().fg(Color::DarkGray),
-        )]
+        ));
+        spans
     }
 }
 
@@ -170,6 +194,7 @@ mod tests {
                 status: AgentStatus::Active,
                 tool_name: Some("Read".into()),
             }),
+            produce: ProduceCounts::default(),
         };
         let area = Rect::new(0, 0, 80, 1);
         let mut buf = Buffer::empty(area);
@@ -181,6 +206,7 @@ mod tests {
         let bar = StatusBar {
             agents: vec![],
             selected_info: None,
+            produce: ProduceCounts::default(),
         };
         let area = Rect::new(0, 0, 40, 1);
         let mut buf = Buffer::empty(area);
@@ -197,6 +223,7 @@ mod tests {
                 tool_name: None,
             }],
             selected_info: None,
+            produce: ProduceCounts::default(),
         };
         let area = Rect::new(0, 0, 0, 0);
         let mut buf = Buffer::empty(area);

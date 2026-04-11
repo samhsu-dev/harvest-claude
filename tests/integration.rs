@@ -471,6 +471,7 @@ mod render {
             row: 0,
             color: None,
             is_seat: false,
+            tier: 0,
         }];
         let mut buf = PixelBuffer::new(64, 64);
         let input = SceneInput {
@@ -514,6 +515,7 @@ mod full_pipeline {
                 row: f.row,
                 color: None,
                 is_seat: f.is_seat,
+                tier: 0,
             })
             .collect();
 
