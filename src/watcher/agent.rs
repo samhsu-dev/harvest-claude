@@ -146,11 +146,20 @@ impl Agent {
         }
         if background_launch {
             self.background_tool_ids.insert(id.to_owned());
+            self.leave_permission();
             return false;
         }
         let was_background = self.background_tool_ids.remove(id);
         self.tools.retain(|t| t.id != id);
+        self.leave_permission();
         was_background
+    }
+
+    // A tool result shows the awaited approval was given.
+    fn leave_permission(&mut self) {
+        if self.status == AgentStatus::Permission {
+            self.status = AgentStatus::Active;
+        }
     }
 
     // Returns whether the closed turn used a tool.
@@ -298,6 +307,22 @@ mod tests {
 
         a.apply(&tool_done("t1", false));
         assert!(a.tools.is_empty());
+    }
+
+    #[test]
+    fn tool_result_returns_a_permission_agent_to_active() {
+        let mut a = applied(&[tool_start("t1", "Bash", "")]);
+        a.status = AgentStatus::Permission;
+
+        a.apply(&tool_done("other", false));
+        assert_eq!(
+            a.status,
+            AgentStatus::Permission,
+            "unknown tool id is ignored"
+        );
+
+        a.apply(&tool_done("t1", false));
+        assert_eq!(a.status, AgentStatus::Active);
     }
 
     #[test]

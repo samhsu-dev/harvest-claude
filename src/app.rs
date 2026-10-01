@@ -19,7 +19,7 @@ use crate::render::composer::{
     self, BubbleRender, CharacterRender, CompanionRender, FurnitureRender, SceneInput,
 };
 use crate::tui::TerminalGuard;
-use crate::types::{AgentEvent, AgentStatus, AnimType, CompanionKind, ProduceType};
+use crate::types::{AgentEvent, AgentStatus, AnimType, BubbleKind, CompanionKind, ProduceType};
 use crate::ui::input;
 use crate::ui::status_bar::{AgentSummary, SelectedInfo, StatusBar};
 use crate::watcher::agent::ApplyOutcome;
@@ -298,6 +298,7 @@ impl App {
                 ..
             } => {
                 self.timers.cancel_permission(agent_id);
+                self.clear_permission_bubble(agent_id);
                 if background_launch {
                     self.add_companion(agent_id, &tool_id);
                 }
@@ -318,6 +319,25 @@ impl App {
                 }
             }
             AgentEvent::Title { .. } | AgentEvent::Prompt { .. } | AgentEvent::Identity { .. } => {}
+        }
+    }
+
+    // The bubble goes once the agent has left the Permission status.
+    fn clear_permission_bubble(&mut self, agent_id: usize) {
+        let still_waiting_for_approval = self
+            .agents
+            .get(agent_id)
+            .is_some_and(|a| a.status == AgentStatus::Permission);
+        if still_waiting_for_approval {
+            return;
+        }
+        if let Some(ch) = self.office.character_by_agent_mut(agent_id)
+            && ch
+                .bubble
+                .as_ref()
+                .is_some_and(|b| b.kind == BubbleKind::Permission)
+        {
+            ch.dismiss_bubble();
         }
     }
 
@@ -870,6 +890,42 @@ mod tests {
             Duration::from_secs(2),
             |a| companion_count(a, id) == 0
         ));
+    }
+
+    #[test]
+    fn tool_result_clears_the_permission_state_and_bubble() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let path = write_transcript(&project, "s1");
+        let mut app = App::for_test(dir.path().to_path_buf());
+        assert!(app.adopt_session(path.clone(), "proj".into(), "s1".into()));
+        let id = app.agents.agents()[0].id;
+
+        append_line(
+            &path,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"rm x"}}]}}"#,
+        );
+        assert!(tick_until(&mut app, Duration::from_secs(2), |a| {
+            a.agents
+                .get(id)
+                .is_some_and(|ag| ag.status == AgentStatus::Active)
+        }));
+        app.apply_permission(id);
+        assert_eq!(app.agents.get(id).unwrap().status, AgentStatus::Permission);
+        assert!(app.office.character_by_agent(id).unwrap().bubble.is_some());
+
+        append_line(
+            &path,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
+        );
+        assert!(tick_until(&mut app, Duration::from_secs(2), |a| {
+            a.agents
+                .get(id)
+                .is_some_and(|ag| ag.status != AgentStatus::Permission)
+        }));
+        assert_eq!(app.agents.get(id).unwrap().status, AgentStatus::Active);
+        assert!(app.office.character_by_agent(id).unwrap().bubble.is_none());
     }
 
     #[test]
