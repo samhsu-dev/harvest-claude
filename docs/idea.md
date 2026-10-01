@@ -45,7 +45,7 @@ Keyboard / Mouse ──▶ Action ──▶ App (agents, timers, farm) ──▶
   - **Relationships:** Agent → Character (visual). Agent → Reader (data source). Agent → Project Identity (where it works).
 
 - **Agent Status**
-  - **Definition:** The inferred state of an agent: Active (a tool is running), Idle (turn finished or text-only reply settled), Waiting (turn just completed, awaiting the user), Permission (a tool awaits user approval), Dormant (no transcript writes for a long time).
+  - **Definition:** The inferred state of an agent: Active (a tool-use was seen since the last turn end), Idle (adopted or woken, no tool-use seen yet), Waiting (turn ended or text-only reply settled, awaiting the user), Permission (a tool awaits user approval), Dormant (no transcript writes for a long time).
   - **Scope:** Derived from Agent Events and Heuristic Timers. Never read from a definitive signal; Claude Code does not record permission prompts in the transcript.
   - **Relationships:** Drives Character animation, Speech Bubble, status bar text, and Dormancy. Transition rules: `model.md`.
 
@@ -57,7 +57,7 @@ Keyboard / Mouse ──▶ Action ──▶ App (agents, timers, farm) ──▶
 - **Turn**
   - **Definition:** One assistant response cycle, from a user prompt to the system record that reports the turn duration.
   - **Scope:** The turn-end record is the only definitive "agent stopped" signal. Text-only turns emit no such record and rely on the text-idle timer. Thinking-only assistant lines are neither text nor tools and never start a timer.
-  - **Relationships:** Turn end clears every foreground Tool Activity, cancels timers, and moves the Agent to Waiting, then Idle.
+  - **Relationships:** Turn end clears every foreground Tool Activity, cancels timers, and moves the Agent to Waiting.
 
 - **Activity Summary**
   - **Definition:** A one-line, human-readable statement of what an agent is doing right now, shown in the status bar and above the selected character.
@@ -72,7 +72,7 @@ Keyboard / Mouse ──▶ Action ──▶ App (agents, timers, farm) ──▶
 - **Heuristic Timer**
   - **Definition:** A per-agent timer that infers a status Claude Code never writes down. Two kinds: permission (a non-exempt tool has run for 7 s without a result) and text-idle (a text-only reply has had no follow-up for 5 s).
   - **Scope:** One permission timer per agent, restarted on each new tool start, cancelled by a tool result or turn end. Exempt tools: sub-agent launches and user questions. No progress records exist in current transcripts, so a long-running tool is indistinguishable from a permission prompt.
-  - **Relationships:** Expiry sets Agent Status to Permission or Idle and raises a Speech Bubble.
+  - **Relationships:** Expiry sets Agent Status to Permission or Waiting and raises a Speech Bubble.
 
 - **Character**
   - **Definition:** The animated 8×16-pixel farm worker that represents one Agent on the farm.
@@ -143,7 +143,7 @@ Keyboard / Mouse ──▶ Action ──▶ App (agents, timers, farm) ──▶
 2. **Discovery** — the Scanner notices a new or growing transcript → new Agent → Palette assigned → Character spawns. A transcript that stops growing moves through Dormancy to removal.
 3. **Tailing** — the Reader appends new complete lines, buffering a partial last line across polls, and decoding on UTF-8 boundaries only.
 4. **Parsing** — each record yields Agent Events (tool start with detail, tool done with error flag, turn end, text reply, title, prompt, identity) → App updates the Agent and its timers.
-5. **Inference** — Heuristic Timers expire → Permission or Idle status → Speech Bubble. A tool result or turn end clears the bubble and cancels the timer.
+5. **Inference** — Heuristic Timers expire → Permission or Waiting status → Speech Bubble. A tool result or turn end clears the bubble and cancels the timer.
 6. **Reward** — turn end at a work Seat → Produce → delivery walk → Warehouse count → atomic save.
 7. **Rendering** — on each frame the Farm composes tiles, furniture, Characters, Companions, Bubbles into the pixel buffer → half-block cells → status bar with Project Identity, Agent Status, and Activity Summary for the selected agent.
 

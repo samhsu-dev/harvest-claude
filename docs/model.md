@@ -7,7 +7,7 @@ Formalizes the entities, relations, state rules, and invariants behind the conce
 - **Session Transcript** — one append-only JSONL file under a project hash directory. Exists while the file exists on disk. Its path is `<projects root>/<hash>/<session-uuid>.jsonl`; files under a `subagents/` directory are sub-agent transcripts and are never a Session Transcript.
 - **Record** — one line of a Session Transcript, one JSON object with a top-level kind. Consumed kinds: assistant content block, user prompt, tool result, turn end, session title, last prompt. Any other kind is ignored.
 - **Agent** — the tracked session behind one Session Transcript. Exists from discovery until removal. Carries exactly one Agent Status, zero or more Tool Activities, one Project Identity, one Activity Summary, and a set of background sub-agent markers.
-- **Agent Status** — one of Active, Idle, Waiting, Permission, Dormant. Always defined for an Agent.
+- **Agent Status** — one of Active, Idle, Waiting, Permission, Dormant. Always defined for an Agent. Idle holds from adoption or wake until the first tool-use Record.
 - **Tool Activity** — one tool invocation identified by its tool id. Exists from its tool-use Record until its tool-result Record or the turn end that follows it. Carries a tool name, a detail string derived from the tool input, and, once finished, an error flag.
 - **Turn** — the span from a user prompt Record to the turn-end Record. A text-only turn has no turn-end Record and ends by the text-idle Heuristic Timer.
 - **Heuristic Timer** — a deadline attached to one Agent. Two kinds: permission and text-idle. An Agent holds at most one timer of each kind.
@@ -50,14 +50,11 @@ Agent Status transitions. "Tool result" means the tool-result Record for a Tool 
 | Source | Trigger | Guard | Target |
 |--------|---------|-------|--------|
 | any non-Dormant | tool-use Record | — | Active |
-| Active | tool result | no Tool Activity remains | Idle |
-| Active | tool result | another Tool Activity remains | Active |
+| Active | tool result | — | Active |
 | Active | permission timer expiry | a non-exempt Tool Activity remains | Permission |
-| Permission | tool result | — | Active, or Idle when none remains |
+| Permission | tool result | — | Active |
 | any non-Dormant | turn-end Record | — | Waiting |
-| Waiting | Waiting bubble fades | — | Idle |
-| Idle | text Record | no Tool Activity in this Turn | Idle, text-idle timer started |
-| Idle | text-idle timer expiry | — | Idle, Waiting bubble shown |
+| any non-Dormant | text-idle timer expiry | — | Waiting, Waiting bubble shown |
 | any non-Dormant | no transcript write for 10 min | — | Dormant |
 | Dormant | transcript write | — | Idle, then by the Record as above |
 | Dormant | no transcript write for 2 h | — | removed |
