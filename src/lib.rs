@@ -5,6 +5,7 @@ pub mod constants;
 pub mod engine;
 pub mod event;
 pub mod layout;
+pub mod logging;
 pub mod render;
 pub mod tui;
 pub mod types;

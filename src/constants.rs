@@ -73,3 +73,15 @@ pub const AUTO_ON_FACING_DEPTH: u16 = 3;
 /// Frame timing.
 pub const MAX_DELTA_TIME: f64 = 0.1;
 pub const TICK_RATE_MS: u64 = 16;
+
+/// Subdirectory of the config directory that holds log files.
+pub const LOG_DIR_NAME: &str = "logs";
+
+/// Log file name prefix; files are `harvest-claude.<date>.log`.
+pub const LOG_FILE_PREFIX: &str = "harvest-claude";
+
+/// Log file name suffix.
+pub const LOG_FILE_SUFFIX: &str = "log";
+
+/// Daily log files kept before the oldest is deleted.
+pub const LOG_MAX_FILES: usize = 3;
