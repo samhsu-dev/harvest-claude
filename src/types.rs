@@ -136,33 +136,30 @@ pub enum CompanionKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AgentEvent {
+    /// A tool invocation started.
     ToolStart {
         tool_id: String,
         tool_name: String,
+        /// One-line description of the tool input; empty when the tool has none.
+        detail: String,
     },
+    /// A tool result arrived.
     ToolDone {
         tool_id: String,
+        is_error: bool,
+        /// The result only reports that a background agent was launched.
+        background_launch: bool,
     },
+    /// The assistant finished its turn.
     TurnEnd,
-    TextOnly,
-    SubAgentToolStart {
-        parent_tool_id: String,
-        tool_id: String,
-        tool_name: String,
-    },
-    SubAgentToolDone {
-        parent_tool_id: String,
-        tool_id: String,
-    },
-    SubAgentSpawn {
-        parent_tool_id: String,
-    },
-    BashProgress {
-        tool_id: String,
-    },
-    BackgroundAgentDetected {
-        tool_id: String,
-    },
+    /// Assistant text; the first non-empty line.
+    Text { first_line: String },
+    /// Session title; `custom` is true for a user-chosen title.
+    Title { title: String, custom: bool },
+    /// A user prompt.
+    Prompt { text: String },
+    /// Working directory and git branch of the session.
+    Identity { cwd: String, git_branch: String },
 }
 
 // ---------------------------------------------------------------------------

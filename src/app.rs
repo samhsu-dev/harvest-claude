@@ -22,7 +22,9 @@ use crate::tui::TerminalGuard;
 use crate::types::{AgentEvent, AgentStatus, AnimType, CompanionKind, ProduceType};
 use crate::ui::input;
 use crate::ui::status_bar::{AgentSummary, SelectedInfo, StatusBar};
+use crate::watcher::agent::ApplyOutcome;
 use crate::watcher::focus;
+use crate::watcher::parser::{self, truncate_chars};
 use crate::watcher::registry::AgentRegistry;
 use crate::watcher::scanner::{DirectoryScanner, ScanEvent, session_info};
 use crate::watcher::timer::{TimerEvent, TimerManager};
@@ -157,8 +159,10 @@ impl App {
         }
         match self.agents.add_agent(session_id, path, project_name) {
             Ok(id) => {
-                let (palette, hue_shift) = self.agents.assign_palette();
-                self.office.add_character(id, palette, hue_shift);
+                if let Some(agent) = self.agents.get(id) {
+                    self.office
+                        .add_character(id, agent.palette, agent.hue_shift);
+                }
                 true
             }
             Err(e) => {
@@ -199,55 +203,6 @@ impl App {
                 }
             }
             Action::Quit => self.running = false,
-            Action::AgentDiscovered {
-                path,
-                project,
-                session_id,
-            } => {
-                if !self.agents.has_path(&path)
-                    && self.office.characters.len() < MAX_AGENTS
-                    && let Ok(id) = self.agents.add_agent(session_id, path, project)
-                {
-                    let (palette, hue_shift) = self.agents.assign_palette();
-                    self.office.add_character(id, palette, hue_shift);
-                }
-            }
-            Action::AgentGone { path } => {
-                let id = self
-                    .agents
-                    .agents()
-                    .iter()
-                    .find(|a| a.jsonl_path == path)
-                    .map(|a| a.id);
-                if let Some(id) = id {
-                    self.office.remove_character(id);
-                    self.agents.remove_agent(id);
-                    self.timers.cancel_all(id);
-                    if self.selected == Some(id) {
-                        self.selected = None;
-                    }
-                }
-            }
-            Action::AgentEvent { agent_id, event } => {
-                self.handle_agent_event(agent_id, event);
-            }
-            Action::PermissionTimeout { agent_id } => {
-                self.apply_permission(agent_id);
-            }
-            Action::TextIdleTimeout { agent_id } => {
-                self.apply_waiting(agent_id);
-            }
-            Action::ToolDoneReady {
-                agent_id,
-                ref tool_id,
-            } => {
-                if let Some(agent) = self.agents.get_mut(agent_id) {
-                    agent.active_tools.remove(tool_id);
-                    if agent.active_tools.is_empty() && !agent.had_tools_in_turn {
-                        agent.status = AgentStatus::Idle;
-                    }
-                }
-            }
         }
     }
 
@@ -314,8 +269,8 @@ impl App {
         // Poll JSONL readers
         for (agent_id, events) in self.agents.poll_all() {
             self.timers.cancel_text_idle(agent_id);
-            for event in events {
-                self.handle_agent_event(agent_id, event);
+            for (event, outcome) in events {
+                self.handle_agent_event(agent_id, event, outcome);
             }
         }
 
@@ -324,11 +279,6 @@ impl App {
             match timer_event {
                 TimerEvent::PermissionTimeout { agent_id } => self.apply_permission(agent_id),
                 TimerEvent::TextIdleTimeout { agent_id } => self.apply_waiting(agent_id),
-                TimerEvent::ToolDoneReady { agent_id, tool_id } => {
-                    if let Some(agent) = self.agents.get_mut(agent_id) {
-                        agent.active_tools.remove(&tool_id);
-                    }
-                }
             }
         }
 
@@ -338,118 +288,83 @@ impl App {
         self.office.update(dt);
     }
 
-    fn handle_agent_event(&mut self, agent_id: usize, event: AgentEvent) {
+    /// Apply the side effects of one transcript event the agent has already absorbed.
+    fn handle_agent_event(&mut self, agent_id: usize, event: AgentEvent, outcome: ApplyOutcome) {
         match event {
-            AgentEvent::ToolStart { tool_id, tool_name } => {
-                if let Some(agent) = self.agents.get_mut(agent_id) {
-                    agent.active_tools.insert(tool_id, tool_name.clone());
-                    agent.had_tools_in_turn = true;
-                    agent.status = AgentStatus::Active;
+            AgentEvent::ToolStart { tool_name, .. } => self.on_tool_start(agent_id, &tool_name),
+            AgentEvent::ToolDone {
+                tool_id,
+                background_launch,
+                ..
+            } => {
+                self.timers.cancel_permission(agent_id);
+                if background_launch {
+                    self.add_companion(agent_id, &tool_id);
                 }
-                if crate::watcher::parser::is_non_exempt_tool(&tool_name) {
-                    self.timers.start_permission(agent_id);
-                }
-                // Wake dormant characters on new tool activity
-                if let Some(ch) = self.office.character_by_agent_mut(agent_id)
-                    && ch.is_dormant
-                {
-                    ch.wake_from_dormant();
-                }
-                // Compute path before mutable borrow of character
-                let seat_and_path = self.office.character_by_agent(agent_id).map(|ch| {
-                    let seat_pos = ch.seat_id.map(|sid| {
-                        let seat = &self.office.seats[sid];
-                        (seat.col, seat.row)
-                    });
-                    let from = ch.current_tile();
-                    let path = seat_pos
-                        .and_then(|sp| pathfind::bfs(&self.office.walkable, from, sp, Some(sp)))
-                        .unwrap_or_default();
-                    (seat_pos, path)
-                });
-                if let Some((seat_pos, path)) = seat_and_path
+                if outcome.background_finished
                     && let Some(ch) = self.office.character_by_agent_mut(agent_id)
                 {
-                    ch.set_active(&tool_name, seat_pos, VecDeque::from(path));
+                    ch.remove_companion(&tool_id);
                 }
             }
-            AgentEvent::ToolDone { ref tool_id } => {
-                self.timers.cancel_permission(agent_id);
-                // Remove companion if this was a background agent
-                let is_bg = self
+            AgentEvent::TurnEnd => self.on_turn_end(agent_id, outcome.turn_had_tools),
+            AgentEvent::Text { .. } => {
+                let tool_free = self
                     .agents
                     .get(agent_id)
-                    .is_some_and(|a| a.background_tool_ids.contains(tool_id));
-                if is_bg && let Some(ch) = self.office.character_by_agent_mut(agent_id) {
-                    ch.remove_companion(tool_id);
-                }
-                self.timers.delay_tool_done(agent_id, tool_id.clone());
-            }
-            AgentEvent::TurnEnd => {
-                let had_tools = self
-                    .agents
-                    .get(agent_id)
-                    .is_some_and(|a| a.had_tools_in_turn);
-
-                if let Some(agent) = self.agents.get_mut(agent_id) {
-                    let bg = agent.background_tool_ids.clone();
-                    agent.active_tools.retain(|k, _| bg.contains(k));
-                    agent.had_tools_in_turn = false;
-                    agent.status = AgentStatus::Waiting;
-                }
-                self.timers.cancel_all(agent_id);
-
-                // Determine produce from work animation, then deliver to barn
-                let delivered = if had_tools {
-                    self.start_barn_delivery(agent_id)
-                } else {
-                    false
-                };
-
-                if !delivered && let Some(ch) = self.office.character_by_agent_mut(agent_id) {
-                    ch.set_idle();
-                    ch.set_waiting();
-                }
-            }
-            AgentEvent::TextOnly => {
-                if let Some(agent) = self.agents.get_mut(agent_id)
-                    && !agent.had_tools_in_turn
-                {
+                    .is_some_and(|a| !a.had_tools_in_turn);
+                if tool_free {
                     self.timers.start_text_idle(agent_id);
                 }
             }
-            AgentEvent::BashProgress { .. } => {
-                self.timers.restart_permission(agent_id);
-            }
-            AgentEvent::BackgroundAgentDetected { ref tool_id } => {
-                if let Some(agent) = self.agents.get_mut(agent_id) {
-                    agent.background_tool_ids.insert(tool_id.clone());
-                }
-                // Spawn a companion animal for this background agent
-                let kind = pick_companion_kind(agent_id, tool_id);
-                if let Some(ch) = self.office.character_by_agent_mut(agent_id) {
-                    ch.add_companion(tool_id.clone(), kind);
-                }
-            }
-            AgentEvent::SubAgentSpawn { ref parent_tool_id } => {
-                // Sub-agents appear as companion animals on the parent character
-                let kind = pick_companion_kind(agent_id, parent_tool_id);
-                if let Some(ch) = self.office.character_by_agent_mut(agent_id) {
-                    ch.add_companion(parent_tool_id.clone(), kind);
-                }
-            }
-            AgentEvent::SubAgentToolStart { .. } => {
-                // Short-term sub-agent activity: activate nearby crop plots
-                self.activate_nearby_crops(agent_id);
-            }
-            AgentEvent::SubAgentToolDone {
-                ref parent_tool_id, ..
-            } => {
-                // Remove companion when sub-agent tool finishes
-                if let Some(ch) = self.office.character_by_agent_mut(agent_id) {
-                    ch.remove_companion(parent_tool_id);
-                }
-            }
+            AgentEvent::Title { .. } | AgentEvent::Prompt { .. } | AgentEvent::Identity { .. } => {}
+        }
+    }
+
+    fn on_tool_start(&mut self, agent_id: usize, tool_name: &str) {
+        if parser::is_non_exempt_tool(tool_name) {
+            self.timers.start_permission(agent_id);
+        }
+        // Wake dormant characters on new tool activity
+        if let Some(ch) = self.office.character_by_agent_mut(agent_id)
+            && ch.is_dormant
+        {
+            ch.wake_from_dormant();
+        }
+        // Compute path before mutable borrow of character
+        let seat_and_path = self.office.character_by_agent(agent_id).map(|ch| {
+            let seat_pos = ch.seat_id.map(|sid| {
+                let seat = &self.office.seats[sid];
+                (seat.col, seat.row)
+            });
+            let from = ch.current_tile();
+            let path = seat_pos
+                .and_then(|sp| pathfind::bfs(&self.office.walkable, from, sp, Some(sp)))
+                .unwrap_or_default();
+            (seat_pos, path)
+        });
+        if let Some((seat_pos, path)) = seat_and_path
+            && let Some(ch) = self.office.character_by_agent_mut(agent_id)
+        {
+            ch.set_active(tool_name, seat_pos, VecDeque::from(path));
+        }
+    }
+
+    fn on_turn_end(&mut self, agent_id: usize, turn_had_tools: bool) {
+        self.timers.cancel_all(agent_id);
+        // Determine produce from work animation, then deliver to barn
+        let delivered = turn_had_tools && self.start_barn_delivery(agent_id);
+        if !delivered && let Some(ch) = self.office.character_by_agent_mut(agent_id) {
+            ch.set_idle();
+            ch.set_waiting();
+        }
+    }
+
+    // A companion animal stands for a background agent running next to its parent.
+    fn add_companion(&mut self, agent_id: usize, tool_id: &str) {
+        let kind = pick_companion_kind(agent_id, tool_id);
+        if let Some(ch) = self.office.character_by_agent_mut(agent_id) {
+            ch.add_companion(tool_id.to_owned(), kind);
         }
     }
 
@@ -612,25 +527,6 @@ impl App {
         }
     }
 
-    /// Activate nearby crop plots when a sub-agent tool runs (growth effect).
-    fn activate_nearby_crops(&mut self, agent_id: usize) {
-        let tile = match self.office.character_by_agent(agent_id) {
-            Some(ch) => ch.current_tile(),
-            None => return,
-        };
-        // Find crop plots within 3 tiles and switch to _ON
-        for furn in &mut self.office.furniture {
-            if furn.furniture_type != "CROP_PLOT" {
-                continue;
-            }
-            let dist = (furn.col as i32 - tile.0 as i32).unsigned_abs()
-                + (furn.row as i32 - tile.1 as i32).unsigned_abs();
-            if dist <= 3 {
-                furn.furniture_type = "CROP_PLOT_ON".to_owned();
-            }
-        }
-    }
-
     /// Compose scene + status bar.
     fn render(&mut self, terminal: &mut TerminalGuard) -> Result<()> {
         terminal
@@ -738,7 +634,7 @@ impl App {
                 let term_buf = frame.buffer_mut();
                 for ch in self.office.characters.iter().filter(|c| !c.is_dormant) {
                     let agent = self.agents.agents().iter().find(|a| a.id == ch.agent_id);
-                    let project_name = agent.map(|a| a.project_name.as_str()).unwrap_or("agent");
+                    let project_name = agent.map_or("agent", |a| a.identity.directory.as_str());
                     let label = short_label(project_name);
 
                     // Character pixel position → terminal cell position
@@ -784,7 +680,9 @@ impl App {
                         let agent = self.agents.agents().iter().find(|a| a.id == ch.agent_id);
                         AgentSummary {
                             color: palette_color(ch.palette),
-                            project_name: agent.map(|a| a.project_name.clone()).unwrap_or_default(),
+                            project_name: agent
+                                .map(|a| a.identity.directory.clone())
+                                .unwrap_or_default(),
                             status: agent.map(|a| a.status).unwrap_or(AgentStatus::Idle),
                             tool_name: ch.tool_name.clone(),
                         }
@@ -795,7 +693,7 @@ impl App {
                     let agent = self.agents.agents().iter().find(|a| a.id == id)?;
                     let ch = self.office.character_by_agent(id)?;
                     Some(SelectedInfo {
-                        project_name: agent.project_name.clone(),
+                        project_name: agent.identity.directory.clone(),
                         session_id: agent.session_id.clone(),
                         status: agent.status,
                         tool_name: ch.tool_name.clone(),
@@ -840,27 +738,12 @@ fn parse_tile_key(key: &str) -> Option<(u16, u16)> {
     Some((col, row))
 }
 
-/// Extract a short display label from a project name/hash.
-///
-/// Converts `-Users-foo-Projects-bar` → `bar`, or truncates to 8 chars.
-fn short_label(project_name: &str) -> String {
-    // Project names are often hashes like "-Users-foo-Projects-bar"
-    // Extract the last meaningful segment
-    let cleaned = project_name.trim_start_matches('-');
-    let segments: Vec<&str> = cleaned.split('-').collect();
-
-    // Find the segment after "Projects" if it exists
-    let label = segments
-        .iter()
-        .position(|&s| s.eq_ignore_ascii_case("Projects"))
-        .and_then(|idx| segments.get(idx + 1))
-        .copied()
-        .unwrap_or_else(|| segments.last().copied().unwrap_or("agent"));
-
-    if label.len() > 8 {
-        format!("{}…", &label[..7])
+/// Shorten a project directory name to at most 8 characters for a character label.
+fn short_label(directory: &str) -> String {
+    if directory.chars().count() > 8 {
+        format!("{}…", truncate_chars(directory, 7))
     } else {
-        label.to_owned()
+        directory.to_owned()
     }
 }
 
@@ -928,6 +811,65 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         false
+    }
+
+    fn append_line(path: &std::path::Path, line: &str) {
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(file, "{line}").unwrap();
+    }
+
+    fn companion_count(app: &App, agent_id: usize) -> usize {
+        app.office
+            .character_by_agent(agent_id)
+            .map_or(0, |ch| ch.companions.len())
+    }
+
+    #[test]
+    fn background_agent_companion_lives_until_its_final_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let path = write_transcript(&project, "s1");
+        let mut app = App::for_test(dir.path().to_path_buf());
+        assert!(app.adopt_session(path.clone(), "proj".into(), "s1".into()));
+        let id = app.agents.agents()[0].id;
+
+        append_line(
+            &path,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"bg1","name":"Agent","input":{"description":"Search"}}]}}"#,
+        );
+        append_line(
+            &path,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"bg1","content":[{"type":"text","text":"Async agent launched successfully.\nagentId: a1"}]}]}}"#,
+        );
+        assert!(tick_until(
+            &mut app,
+            Duration::from_secs(2),
+            |a| companion_count(a, id) == 1
+        ));
+
+        append_line(
+            &path,
+            r#"{"type":"system","subtype":"turn_duration","durationMs":5}"#,
+        );
+        app.on_tick(0.016);
+        std::thread::sleep(Duration::from_millis(50));
+        app.on_tick(0.016);
+        assert_eq!(
+            companion_count(&app, id),
+            1,
+            "turn end keeps the background companion"
+        );
+
+        append_line(
+            &path,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"bg1","content":"final report"}]}}"#,
+        );
+        assert!(tick_until(
+            &mut app,
+            Duration::from_secs(2),
+            |a| companion_count(a, id) == 0
+        ));
     }
 
     #[test]

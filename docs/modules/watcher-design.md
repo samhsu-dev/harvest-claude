@@ -89,7 +89,7 @@ Fields (private): `agents: Vec<Agent>`, `readers: HashMap<usize, JsonlReader>`, 
 | `add_agent` | `(&mut self, session_id: String, path: PathBuf, hash_dir: String) -> Result<usize>` | Claim least-used palette; open reader at `REPLAY_TAIL_BYTES` before end of file. Errors: file open failure. |
 | `replay` | `(&mut self, id) -> Result<()>` | Read the tail, apply every event to the Agent without side effects. |
 | `remove_agent` | `(&mut self, id)` | Drop reader, release palette. |
-| `poll_all` | `(&mut self) -> Vec<(usize, Vec<AgentEvent>)>` | New lines → events. Applies each event to its Agent before returning; per-Agent read error logged once and skipped. |
+| `poll_all` | `(&mut self) -> Vec<(usize, Vec<(AgentEvent, ApplyOutcome)>)>` | New lines → events. Applies each event to its Agent and returns it with its outcome, so `App` runs side effects per event; a read error is logged and the Agent skipped. |
 | `get`, `get_mut`, `agents`, `has_path` | lookup | `agents()` returns `&[Agent]`. |
 
 Removed: sub-agent API (`add_sub_agent`, `remove_sub_agent`, `is_sub_agent`, `parent_id`, `sub_agent_map`, `active_sub_tool_names`), public `assign_palette`.

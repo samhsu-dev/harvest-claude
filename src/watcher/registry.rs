@@ -1,37 +1,16 @@
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::Result;
 
-use crate::constants::PALETTE_COUNT;
-use crate::types::{AgentEvent, AgentStatus};
+use crate::constants::{HUE_SHIFT_MIN_DEG, HUE_SHIFT_RANGE_DEG, PALETTE_COUNT};
+use crate::types::AgentEvent;
+use crate::watcher::agent::{Agent, ApplyOutcome};
 use crate::watcher::jsonl::JsonlReader;
 use crate::watcher::parser;
 
-/// A tracked Claude Code agent session.
-#[derive(Debug, Clone)]
-pub struct Agent {
-    /// Unique agent ID (positive for top-level, negative for sub-agents).
-    pub id: usize,
-    /// Session identifier from the JSONL path.
-    pub session_id: String,
-    /// Path to the JSONL file being tailed.
-    pub jsonl_path: PathBuf,
-    /// Human-readable project name.
-    pub project_name: String,
-    /// Current inferred agent status.
-    pub status: AgentStatus,
-    /// Currently active tools: tool_id -> tool_name.
-    pub active_tools: HashMap<String, String>,
-    /// Whether any tools were used in the current turn.
-    pub had_tools_in_turn: bool,
-    /// Parent agent ID for sub-agents.
-    pub parent_id: Option<usize>,
-    /// Tool IDs for background (async) agents that survive turn boundaries.
-    pub background_tool_ids: HashSet<String>,
-    /// Sub-agent tool tracking on parent: tool_id -> tool_name.
-    pub active_sub_tool_names: HashMap<String, String>,
-}
+/// Events one agent produced in a poll, each paired with what applying it changed.
+pub type AppliedEvents = Vec<(AgentEvent, ApplyOutcome)>;
 
 /// Manages all tracked agents, their JSONL readers, and palette assignments.
 #[derive(Debug)]
@@ -40,7 +19,6 @@ pub struct AgentRegistry {
     readers: HashMap<usize, JsonlReader>,
     next_id: usize,
     palette_usage: [u8; PALETTE_COUNT as usize],
-    sub_agent_map: HashMap<String, usize>,
 }
 
 impl AgentRegistry {
@@ -51,111 +29,74 @@ impl AgentRegistry {
             readers: HashMap::new(),
             next_id: 1,
             palette_usage: [0; PALETTE_COUNT as usize],
-            sub_agent_map: HashMap::new(),
         }
     }
 
-    /// Add a new top-level agent and its JSONL reader.
+    /// Track a transcript as a new agent and claim the least-used palette for it.
     ///
+    /// `hash_dir` names the project until the transcript reports its working directory.
     /// Returns the assigned agent ID.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the transcript cannot be opened.
     pub fn add_agent(
         &mut self,
         session_id: String,
         path: PathBuf,
-        project_name: String,
+        hash_dir: String,
     ) -> Result<usize> {
+        let reader = JsonlReader::new(path.clone())?;
         let id = self.next_id;
         self.next_id += 1;
 
-        let reader = JsonlReader::new(path.clone())?;
-
-        let agent = Agent {
-            id,
-            session_id,
-            jsonl_path: path,
-            project_name,
-            status: AgentStatus::Active,
-            active_tools: HashMap::new(),
-            had_tools_in_turn: false,
-            parent_id: None,
-            background_tool_ids: HashSet::new(),
-            active_sub_tool_names: HashMap::new(),
-        };
-
-        self.agents.push(agent);
+        let (palette, hue_shift) = self.claim_palette();
+        self.agents.push(Agent::new(
+            id, session_id, path, hash_dir, palette, hue_shift,
+        ));
         self.readers.insert(id, reader);
-
-        // Palette usage incremented (assignment happens externally via assign_palette).
         Ok(id)
     }
 
-    /// Remove an agent and its reader, cleaning up sub-agents.
+    /// Remove an agent and its reader, and release its palette.
     pub fn remove_agent(&mut self, id: usize) {
         self.readers.remove(&id);
-
-        // Remove sub-agents that belong to this agent.
-        let sub_keys: Vec<String> = self
-            .sub_agent_map
-            .iter()
-            .filter(|(_, sub_id)| {
-                let sub_id = **sub_id;
-                self.agents
-                    .iter()
-                    .any(|a| a.id == sub_id && a.parent_id == Some(id))
-            })
-            .map(|(k, _)| k.clone())
-            .collect();
-
-        for key in &sub_keys {
-            if let Some(sub_id) = self.sub_agent_map.remove(key) {
-                self.readers.remove(&sub_id);
-                self.agents.retain(|a| a.id != sub_id);
-            }
+        if let Some(agent) = self.get(id) {
+            let slot = &mut self.palette_usage[usize::from(agent.palette)];
+            *slot = slot.saturating_sub(1);
         }
-
         self.agents.retain(|a| a.id != id);
     }
 
-    /// Poll all agents for new JSONL lines and parse them into events.
-    pub fn poll_all(&mut self) -> Vec<(usize, Vec<AgentEvent>)> {
+    /// Read new transcript lines of every agent and apply their events.
+    ///
+    /// Returns, per agent with new events, each event with the outcome of applying it.
+    pub fn poll_all(&mut self) -> Vec<(usize, AppliedEvents)> {
         let mut results = Vec::new();
-
-        let agent_ids: Vec<usize> = self.agents.iter().map(|a| a.id).collect();
-
-        for agent_id in agent_ids {
-            let lines = match self.readers.get_mut(&agent_id) {
-                Some(reader) => match reader.read_new_lines() {
-                    Ok(lines) => lines,
-                    Err(_) => continue,
-                },
-                None => continue,
-            };
-
-            if lines.is_empty() {
+        for agent in &mut self.agents {
+            let Some(reader) = self.readers.get_mut(&agent.id) else {
                 continue;
-            }
-
-            let mut events = Vec::new();
-            for line in &lines {
-                let Some(record) = parser::parse_line(line) else {
+            };
+            let lines = match reader.read_new_lines() {
+                Ok(lines) => lines,
+                Err(e) => {
+                    tracing::warn!(agent_id = agent.id, "transcript read failed: {e:#}");
                     continue;
-                };
-
-                // Need an immutable reference to the agent for parsing.
-                let agent_idx = match self.agents.iter().position(|a| a.id == agent_id) {
-                    Some(idx) => idx,
-                    None => continue,
-                };
-
-                let line_events = parser::extract_events(&record, &self.agents[agent_idx]);
-                events.extend(line_events);
-            }
-
-            if !events.is_empty() {
-                results.push((agent_id, events));
+                }
+            };
+            let applied: AppliedEvents = lines
+                .iter()
+                .filter_map(|line| parser::parse_line(line))
+                .flat_map(|record| parser::extract_events(&record))
+                .map(|event| {
+                    let outcome = agent.apply(&event);
+                    (event, outcome)
+                })
+                .collect();
+            if !applied.is_empty() {
+                results.push((agent.id, applied));
             }
         }
-
         results
     }
 
@@ -174,107 +115,25 @@ impl AgentRegistry {
         &self.agents
     }
 
-    /// Check if a path is already registered as any agent (top-level or sub-agent).
-    pub fn has_path(&self, path: &std::path::Path) -> bool {
+    /// Check if a path is already tracked by an agent.
+    pub fn has_path(&self, path: &Path) -> bool {
         self.agents.iter().any(|a| a.jsonl_path == path)
     }
 
-    /// Check if an agent ID belongs to a sub-agent (has a parent).
-    pub fn is_sub_agent(&self, id: usize) -> bool {
-        self.agents
-            .iter()
-            .any(|a| a.id == id && a.parent_id.is_some())
-    }
-
-    /// Assign a palette index using least-used strategy.
-    ///
-    /// Returns `(palette_index, optional_hue_shift)`. A hue shift is provided
-    /// when all palettes have been used at least once.
-    pub fn assign_palette(&mut self) -> (u8, Option<i16>) {
+    // Least-used palette; a hue shift is added once every palette is in use.
+    fn claim_palette(&mut self) -> (u8, Option<i16>) {
         let min_usage = self.palette_usage.iter().copied().min().unwrap_or_default();
-
-        let palette_idx = self
+        let index = self
             .palette_usage
             .iter()
-            .position(|&u| u == min_usage)
-            .unwrap_or_default() as u8;
-
-        self.palette_usage[palette_idx as usize] += 1;
-
-        let hue_shift = if min_usage > 0 {
-            // All palettes used at least once — apply hue shift.
-            use crate::constants::{HUE_SHIFT_MIN_DEG, HUE_SHIFT_RANGE_DEG};
-            let shift =
-                HUE_SHIFT_MIN_DEG + (rand::random::<u16>() % HUE_SHIFT_RANGE_DEG as u16) as i16;
-            Some(shift)
-        } else {
-            None
-        };
-
-        (palette_idx, hue_shift)
-    }
-
-    /// Add a sub-agent spawned by a parent tool invocation.
-    ///
-    /// The sub-agent key is `"parentId:parentToolId"`. Returns the new sub-agent ID.
-    pub fn add_sub_agent(
-        &mut self,
-        parent_tool_id: &str,
-        parent_id: usize,
-        path: PathBuf,
-    ) -> Result<usize> {
-        let id = self.next_id;
-        self.next_id += 1;
-
-        let reader = JsonlReader::new_from_start(path.clone())?;
-
-        let parent_project = self
-            .get(parent_id)
-            .map(|a| a.project_name.clone())
+            .position(|&usage| usage == min_usage)
             .unwrap_or_default();
+        self.palette_usage[index] += 1;
 
-        let parent_session = self
-            .get(parent_id)
-            .map(|a| a.session_id.clone())
-            .unwrap_or_default();
-
-        let agent = Agent {
-            id,
-            session_id: parent_session,
-            jsonl_path: path,
-            project_name: parent_project,
-            status: AgentStatus::Active,
-            active_tools: HashMap::new(),
-            had_tools_in_turn: false,
-            parent_id: Some(parent_id),
-            background_tool_ids: HashSet::new(),
-            active_sub_tool_names: HashMap::new(),
-        };
-
-        self.agents.push(agent);
-        self.readers.insert(id, reader);
-
-        let key = format!("{parent_id}:{parent_tool_id}");
-        self.sub_agent_map.insert(key, id);
-
-        Ok(id)
-    }
-
-    /// Remove a sub-agent by its parent tool ID.
-    pub fn remove_sub_agent(&mut self, parent_tool_id: &str) {
-        // Find the key that ends with the parent_tool_id.
-        let key = self
-            .sub_agent_map
-            .keys()
-            .find(|k| k.ends_with(&format!(":{parent_tool_id}")))
-            .cloned();
-
-        let Some(key) = key else { return };
-        let Some(sub_id) = self.sub_agent_map.remove(&key) else {
-            return;
-        };
-        self.readers.remove(&sub_id);
-        self.agents.retain(|a| a.id != sub_id);
+        let hue_shift = (min_usage > 0).then(|| {
+            HUE_SHIFT_MIN_DEG + (rand::random::<u16>() % HUE_SHIFT_RANGE_DEG as u16) as i16
+        });
+        (index as u8, hue_shift)
     }
 }
 
@@ -286,15 +145,20 @@ impl Default for AgentRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
 
-    fn create_test_jsonl(dir: &std::path::Path) -> PathBuf {
+    use super::*;
+    use crate::types::AgentStatus;
+
+    fn create_test_jsonl(dir: &Path) -> PathBuf {
         let path = dir.join("test.jsonl");
-        let mut f = std::fs::File::create(&path).unwrap();
-        f.write_all(b"{\"type\":\"system\",\"message\":{\"subtype\":\"init\"}}\n")
-            .unwrap();
+        std::fs::write(&path, "{\"type\":\"system\",\"subtype\":\"init\"}\n").unwrap();
         path
+    }
+
+    fn append(path: &Path, line: &str) {
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(file, "{line}").unwrap();
     }
 
     #[test]
@@ -304,29 +168,81 @@ mod tests {
 
         let mut reg = AgentRegistry::new();
         let id = reg
-            .add_agent("sess1".into(), path, "project".into())
+            .add_agent("sess1".into(), path.clone(), "project".into())
             .unwrap();
         assert_eq!(reg.agents().len(), 1);
-        assert!(reg.get(id).is_some());
+        assert!(reg.has_path(&path));
+        assert_eq!(reg.get(id).unwrap().display_name(), "project");
 
         reg.remove_agent(id);
         assert!(reg.agents().is_empty());
+        assert!(!reg.has_path(&path));
     }
 
     #[test]
-    fn palette_assignment_least_used() {
+    fn palettes_are_least_used_and_hue_shifted_when_exhausted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = create_test_jsonl(dir.path());
         let mut reg = AgentRegistry::new();
-        let (p1, shift1) = reg.assign_palette();
-        assert_eq!(p1, 0);
-        assert!(shift1.is_none());
 
-        // Fill all palettes.
-        for _ in 1..PALETTE_COUNT {
-            reg.assign_palette();
+        let mut palettes = Vec::new();
+        for i in 0..=PALETTE_COUNT {
+            let id = reg
+                .add_agent(format!("s{i}"), path.clone(), "p".into())
+                .unwrap();
+            palettes.push(reg.get(id).unwrap().clone());
         }
 
-        // Next assignment should have a hue shift.
-        let (_, shift) = reg.assign_palette();
-        assert!(shift.is_some());
+        let distinct: std::collections::HashSet<u8> = palettes[..PALETTE_COUNT as usize]
+            .iter()
+            .map(|a| a.palette)
+            .collect();
+        assert_eq!(distinct.len(), PALETTE_COUNT as usize);
+        assert!(
+            palettes[..PALETTE_COUNT as usize]
+                .iter()
+                .all(|a| a.hue_shift.is_none())
+        );
+        assert!(palettes[PALETTE_COUNT as usize].hue_shift.is_some());
+    }
+
+    #[test]
+    fn removing_an_agent_releases_its_palette() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = create_test_jsonl(dir.path());
+        let mut reg = AgentRegistry::new();
+
+        let first = reg.add_agent("a".into(), path.clone(), "p".into()).unwrap();
+        let palette = reg.get(first).unwrap().palette;
+        reg.remove_agent(first);
+
+        let second = reg.add_agent("b".into(), path, "p".into()).unwrap();
+        assert_eq!(reg.get(second).unwrap().palette, palette);
+    }
+
+    #[test]
+    fn poll_all_applies_events_and_returns_outcomes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = create_test_jsonl(dir.path());
+        let mut reg = AgentRegistry::new();
+        let id = reg.add_agent("s".into(), path.clone(), "p".into()).unwrap();
+
+        append(
+            &path,
+            r#"{"type":"assistant","cwd":"/work/app","gitBranch":"main","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"description":"Run build"}}]}}"#,
+        );
+        append(&path, r#"{"type":"system","subtype":"turn_duration"}"#);
+
+        let results = reg.poll_all();
+        assert_eq!(results.len(), 1);
+        let (agent_id, applied) = &results[0];
+        assert_eq!(*agent_id, id);
+        assert_eq!(applied.len(), 3, "identity, tool start, turn end");
+        assert!(applied[2].1.turn_had_tools);
+
+        let agent = reg.get(id).unwrap();
+        assert_eq!(agent.status, AgentStatus::Waiting);
+        assert_eq!(agent.display_name(), "app (main)");
+        assert!(reg.poll_all().is_empty());
     }
 }

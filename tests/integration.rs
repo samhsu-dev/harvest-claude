@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
 use harvest_claude::engine::pathfind;
 use harvest_claude::engine::state::OfficeState;
@@ -32,6 +32,17 @@ fn layout_with_workstation() -> OfficeLayout {
         tile_colors: None,
         layout_revision: Some(1),
     }
+}
+
+/// Parse one transcript line and apply its events to the agent, as the registry does.
+fn apply_line(registry: &mut AgentRegistry, agent_id: usize, line: &str) -> Vec<AgentEvent> {
+    let record = parser::parse_line(line).expect("valid record");
+    let events = parser::extract_events(&record);
+    let agent = registry.get_mut(agent_id).expect("agent exists");
+    for event in &events {
+        agent.apply(event);
+    }
+    events
 }
 
 fn create_test_jsonl(dir: &std::path::Path) -> std::path::PathBuf {
@@ -153,37 +164,20 @@ mod watcher_engine {
             .unwrap();
 
         let mut state = OfficeState::from_layout(layout_with_workstation());
-        let (palette, hue_shift) = registry.assign_palette();
-        state.add_character(agent_id, palette, hue_shift);
-
-        // Simulate ToolStart
         let agent = registry.get(agent_id).unwrap();
-        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}"#;
-        let record = parser::parse_line(line).unwrap();
-        let events = parser::extract_events(&record, agent);
+        state.add_character(agent_id, agent.palette, agent.hue_shift);
+
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"description":"Run build"}}]}}"#;
+        let events = apply_line(&mut registry, agent_id, line);
 
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
             AgentEvent::ToolStart { tool_name, .. } if tool_name == "Bash"
         ));
-
-        // Apply event: mark agent active
-        if let AgentEvent::ToolStart {
-            ref tool_id,
-            ref tool_name,
-        } = events[0]
-        {
-            let agent_mut = registry.get_mut(agent_id).unwrap();
-            agent_mut
-                .active_tools
-                .insert(tool_id.clone(), tool_name.clone());
-            agent_mut.status = AgentStatus::Active;
-        }
-
-        let agent_after = registry.get(agent_id).unwrap();
-        assert_eq!(agent_after.status, AgentStatus::Active);
-        assert!(!agent_after.active_tools.is_empty());
+        let agent = registry.get(agent_id).unwrap();
+        assert_eq!(agent.status, AgentStatus::Active);
+        assert_eq!(agent.summary(), "Bash: Run build");
     }
 
     #[test]
@@ -197,21 +191,12 @@ mod watcher_engine {
             .unwrap();
 
         let mut state = OfficeState::from_layout(layout_with_workstation());
-        let (palette, hue_shift) = registry.assign_palette();
-        state.add_character(agent_id, palette, hue_shift);
-
-        // Parse turn-end system message
-        let line = r#"{"type":"system","subtype":"turn_duration","durationMs":1523}"#;
         let agent = registry.get(agent_id).unwrap();
-        let record = parser::parse_line(line).unwrap();
-        let events = parser::extract_events(&record, agent);
+        state.add_character(agent_id, agent.palette, agent.hue_shift);
 
-        assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], AgentEvent::TurnEnd));
-
-        // Apply: set agent waiting, character idle
-        let agent_mut = registry.get_mut(agent_id).unwrap();
-        agent_mut.status = AgentStatus::Waiting;
+        let line = r#"{"type":"system","subtype":"turn_duration","durationMs":1523}"#;
+        let events = apply_line(&mut registry, agent_id, line);
+        assert_eq!(events, vec![AgentEvent::TurnEnd]);
 
         let ch = state.character_by_agent_mut(agent_id).unwrap();
         ch.set_idle();
@@ -277,14 +262,18 @@ mod watcher_engine {
         // Text-only assistant message with no prior tools in turn
         let line =
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"thinking..."}]}}"#;
+        assert!(!registry.get(agent_id).unwrap().had_tools_in_turn);
+
+        let events = apply_line(&mut registry, agent_id, line);
+        assert_eq!(
+            events,
+            vec![AgentEvent::Text {
+                first_line: "thinking...".into()
+            }]
+        );
         let agent = registry.get(agent_id).unwrap();
         assert!(!agent.had_tools_in_turn);
-
-        let record = parser::parse_line(line).unwrap();
-        let events = parser::extract_events(&record, agent);
-
-        assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], AgentEvent::TextOnly));
+        assert_eq!(agent.summary(), "thinking...");
 
         // Start text idle timer (what App would do)
         let mut timers = TimerManager::new();
@@ -305,50 +294,39 @@ mod watcher_engine {
         let agent_id = registry
             .add_agent("sess1".into(), path, "project".into())
             .unwrap();
-        let agent = registry.get(agent_id).unwrap();
 
         // Tool start
-        let line1 = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read"}]}}"#;
-        let record1 = parser::parse_line(line1).unwrap();
-        let events1 = parser::extract_events(&record1, agent);
+        let line1 = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a.rs"}}]}}"#;
+        let events1 = apply_line(&mut registry, agent_id, line1);
         assert!(matches!(
             &events1[0],
             AgentEvent::ToolStart {
                 tool_name,
                 tool_id,
-            } if tool_name == "Read" && tool_id == "t1"
+                detail,
+            } if tool_name == "Read" && tool_id == "t1" && detail == "/a.rs"
         ));
+        assert_eq!(registry.get(agent_id).unwrap().tools.len(), 1);
 
         // Tool result
         let line2 =
             r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}"#;
-        let record2 = parser::parse_line(line2).unwrap();
-        let events2 = parser::extract_events(&record2, agent);
+        let events2 = apply_line(&mut registry, agent_id, line2);
         assert!(matches!(
             &events2[0],
-            AgentEvent::ToolDone { tool_id } if tool_id == "t1"
+            AgentEvent::ToolDone { tool_id, .. } if tool_id == "t1"
         ));
+        assert!(registry.get(agent_id).unwrap().tools.is_empty());
 
         // Turn end
         let line3 = r#"{"type":"system","subtype":"turn_duration","durationMs":1523}"#;
-        let record3 = parser::parse_line(line3).unwrap();
-        let events3 = parser::extract_events(&record3, agent);
+        let events3 = apply_line(&mut registry, agent_id, line3);
         assert!(matches!(&events3[0], AgentEvent::TurnEnd));
-
-        // Progress
-        let line4 = r#"{"type":"progress","tool_use_id":"t2"}"#;
-        let record4 = parser::parse_line(line4).unwrap();
-        let events4 = parser::extract_events(&record4, agent);
-        assert!(matches!(
-            &events4[0],
-            AgentEvent::BashProgress { tool_id } if tool_id == "t2"
-        ));
+        assert_eq!(registry.get(agent_id).unwrap().status, AgentStatus::Waiting);
 
         // Unknown type produces no events
-        let line5 = r#"{"type":"unknown","data":{}}"#;
-        let record5 = parser::parse_line(line5).unwrap();
-        let events5 = parser::extract_events(&record5, agent);
-        assert!(events5.is_empty());
+        let line4 = r#"{"type":"unknown","data":{}}"#;
+        assert!(apply_line(&mut registry, agent_id, line4).is_empty());
     }
 
     #[test]
@@ -595,16 +573,16 @@ mod full_pipeline {
         let agent_id = registry
             .add_agent("sess1".into(), path, "project".into())
             .unwrap();
-        let (palette, hue_shift) = registry.assign_palette();
-        state.add_character(agent_id, palette, hue_shift);
+        let agent = registry.get(agent_id).unwrap();
+        state.add_character(agent_id, agent.palette, agent.hue_shift);
 
         assert_eq!(registry.agents().len(), 1);
         assert_eq!(state.characters.len(), 1);
 
         // Simulate tool activity
-        let agent = registry.get_mut(agent_id).unwrap();
-        agent.active_tools.insert("t1".into(), "Bash".into());
-        agent.status = AgentStatus::Active;
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}"#;
+        apply_line(&mut registry, agent_id, line);
+        assert_eq!(registry.get(agent_id).unwrap().status, AgentStatus::Active);
         timers.start_permission(agent_id);
 
         // Removal
@@ -616,33 +594,6 @@ mod full_pipeline {
         assert!(state.characters.is_empty());
         // All seats freed
         assert!(state.seats.iter().all(|s| s.occupied_by.is_none()));
-    }
-
-    #[test]
-    fn multiple_agents_get_unique_palettes() {
-        let mut registry = AgentRegistry::new();
-        let mut palettes = Vec::new();
-
-        // First 6 agents get unique palette indices
-        for _ in 0..6 {
-            let (palette, hue_shift) = registry.assign_palette();
-            assert!(hue_shift.is_none(), "first round has no hue shift");
-            palettes.push(palette);
-        }
-
-        let unique: HashSet<u8> = palettes.iter().copied().collect();
-        assert_eq!(
-            unique.len(),
-            6,
-            "first 6 palette assignments must be unique"
-        );
-
-        // 7th agent gets a hue shift
-        let (_, hue_shift) = registry.assign_palette();
-        assert!(
-            hue_shift.is_some(),
-            "palette wraps with hue shift after all used"
-        );
     }
 
     #[test]
