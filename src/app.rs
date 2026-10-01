@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::path::PathBuf;
 
 use color_eyre::eyre::{Result, WrapErr};
 use crossterm::event::{KeyCode, MouseEventKind};
@@ -40,6 +41,23 @@ pub struct App {
     render_origin: (u16, u16),
 }
 
+/// Load the warehouse from the config directory. When the file cannot be read, persistence is
+/// disabled so the unreadable file is never overwritten.
+fn load_persistent_warehouse(
+    config_dir: Option<std::path::PathBuf>,
+) -> (Option<PathBuf>, Warehouse) {
+    let Some(dir) = config_dir else {
+        return (None, Warehouse::default());
+    };
+    match warehouse::load_warehouse(&dir) {
+        Ok(wh) => (Some(dir), wh),
+        Err(e) => {
+            tracing::warn!("warehouse persistence disabled: {e:#}");
+            (None, Warehouse::default())
+        }
+    }
+}
+
 impl App {
     /// Create a new App from CLI arguments.
     pub fn new(args: Args) -> Result<Self> {
@@ -63,11 +81,7 @@ impl App {
 
         let agents = AgentRegistry::new();
 
-        let config_dir = persistence::config_dir().ok();
-        let wh = config_dir
-            .as_ref()
-            .map(|d| warehouse::load_warehouse(d))
-            .unwrap_or_default();
+        let (config_dir, wh) = load_persistent_warehouse(persistence::config_dir().ok());
 
         Ok(Self {
             office,
