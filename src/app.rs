@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use color_eyre::eyre::{Result, WrapErr};
-use crossterm::event::{KeyCode, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Position};
 use ratatui::style::{Color, Style};
 
@@ -178,7 +178,7 @@ impl App {
             Action::Tick(dt) => self.on_tick(dt),
             Action::Render => {}
             Action::Resize(_, _) => {}
-            Action::Key(key) => self.on_key(key.code),
+            Action::Key(key) => self.on_key(key),
             Action::Mouse(mouse) => {
                 if let MouseEventKind::Down(_) = mouse.kind {
                     self.on_mouse_click(mouse.column, mouse.row);
@@ -457,8 +457,10 @@ impl App {
         }
     }
 
-    fn on_key(&mut self, code: KeyCode) {
-        match code {
+    fn on_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('c') if ctrl => self.running = false,
             KeyCode::Char('q') | KeyCode::Char('Q') => self.running = false,
             KeyCode::Esc => {
                 if let Some(id) = self.selected
@@ -944,6 +946,28 @@ mod tests {
             a.agents.has_path(&ninth)
         });
         assert!(adopted, "refused transcript was never retried");
+    }
+
+    #[test]
+    fn ctrl_c_quits() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = App::for_test(root.path().to_owned());
+        app.update(Action::Key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!app.running);
+    }
+
+    #[test]
+    fn plain_c_does_not_quit() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = App::for_test(root.path().to_owned());
+        app.update(Action::Key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::NONE,
+        )));
+        assert!(app.running);
     }
 
     #[test]
