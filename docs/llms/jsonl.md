@@ -1,82 +1,77 @@
 # JSONL Protocol
 
-> Claude Code transcript record types, parsing rules, agent status derivation.
+> Claude Code transcript record types, event extraction, and reader limits.
 
-## File Location
+## Quick Start
 
-`~/.claude/projects/<hash>/<session-id>.jsonl`
-
-- `<hash>` = workspace path with `:`, `\`, `/` replaced by `-`.
-- `<session-id>` = UUID.
-- One file per Claude Code session. Append-only.
-
-## Record Types
-
-Each line is a self-contained JSON object with a `type` field.
-
-### assistant
-
-```json
-{"type": "assistant", "message": {"content": [
-  {"type": "tool_use", "id": "toolu_xxx", "name": "Read", "input": {...}},
-  {"type": "text", "text": "..."}
-]}}
+```rust
+let mut reader = JsonlReader::new_from_tail(path, REPLAY_TAIL_BYTES)?;
+for line in reader.read_new_lines()? {
+    for event in extract_events(&line) {   // stateless
+        agent.apply(event);
+    }
+}
 ```
 
-- `tool_use` blocks → agent tool start. Extract `id` and `name`.
-- `thinking` blocks → ignored.
+## Key Files
 
-### user
+| File | Responsibility |
+|------|---------------|
+| `src/watcher/jsonl.rs` | `JsonlReader`: byte-level tailing |
+| `src/watcher/parser.rs` | `parse_line`, `extract_events`, `tool_detail`, `is_turn_end`, `is_non_exempt_tool`, `truncate_chars` |
 
-```json
-{"type": "user", "message": {"content": [
-  {"type": "tool_result", "tool_use_id": "toolu_xxx", "content": "..."}
-]}}
-```
+## API
 
-- `tool_result` → agent tool done. Extract `tool_use_id`.
-- `content` can be string (text prompt) or array (tool results). Handle both.
+| Item | Meaning |
+|------|---------|
+| `JsonlReader::new_from_tail(path, tail)` | Start `tail` bytes before the end; discard the cut first line |
+| `JsonlReader::new_from_start(path)` | Start at byte 0 |
+| `read_new_lines()` | Complete lines since the last call, at most `JSONL_READ_CAP` bytes per call |
+| `offset()` | Current byte offset |
 
-### system
+`AgentEvent`: `ToolStart`, `ToolDone` (with `background_launch` flag), `TurnEnd`, `Text`, `Title`, `Prompt`, `Identity`.
 
-```json
-{"type": "system", "subtype": "turn_duration", "duration_ms": 1234}
-```
+## Records
 
-- `subtype == "turn_duration"` → reliable turn-end signal (~98% of tool-using turns).
-- Clear all active tools on this record. Character → IDLE.
-- Never emitted for text-only turns. Use text-idle timer (5s) as fallback.
+Location: `~/.claude/projects/<hash>/<session-id>.jsonl`. Append-only, one JSON object per line.
 
-### progress
+| `type` | Content | Event |
+|--------|---------|-------|
+| `assistant` | `tool_use` blocks (`id`, `name`, `input`) | `ToolStart` |
+| `assistant` | `text` blocks | `Text` |
+| `user` | `tool_result` blocks (`tool_use_id`) | `ToolDone` |
+| `user` | string or array prompt content | `Prompt` |
+| `system` | top-level `subtype: "turn_duration"` | `TurnEnd` |
+| `ai-title`, `custom-title` | session title | `Title` |
+| `last-prompt` | last user prompt | `Prompt` |
+| any record with `cwd` and `gitBranch` | project identity | `Identity` |
 
-```json
-{"type": "progress", "data": {"type": "agent_progress", ...}}
-```
+- `thinking` blocks are ignored.
+- A `tool_result` reading "Async agent launched successfully." sets `background_launch`. The final result of that tool id ends the companion.
 
-- `data.type == "agent_progress"` → sub-agent tool activity.
-- `data.type == "bash_progress"` → long-running Bash output (confirms tool is executing).
+## Tool Animation
 
-## Status Derivation
+| Animation | Tools |
+|-----------|-------|
+| Farm | `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, unknown tools |
+| Harvest | `Read`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `Bash`, `Execute`, `Terminal` |
 
-```
-No active tools + no recent data (>5s)     → Idle
-Active tool_use without tool_result         → Active (typing/reading)
-Active tool_use for >7s without progress    → Permission (waiting for approval)
-system turn_duration received               → Waiting (turn complete, green checkmark)
-```
+Exempt tools never start the permission timer: `Task`, `Agent`, `AskUserQuestion`.
 
-## Tool Categorization
+## Configuration
 
-| Animation | Tool Names |
-|-----------|-----------|
-| Typing | Write, Edit, Bash, Task, NotebookEdit |
-| Reading | Read, Grep, Glob, WebFetch, WebSearch |
-
-Unknown tools default to typing animation.
+| Constant | Value |
+|----------|-------|
+| `JSONL_READ_CAP` | 65536 bytes per read |
+| `JSONL_MAX_LINE_BYTES` | 8 MiB |
+| `REPLAY_TAIL_BYTES` | 65536 |
+| `JSONL_POLL_MS` | 500 |
 
 ## Gotchas
 
-- Partial lines at EOF: JSONL writes are not atomic. Buffer incomplete lines.
-- `/clear` creates a NEW JSONL file. Old file stops growing. Detect via `notify::EventKind::Create`.
-- `turn_duration` never emitted for text-only turns. Start a 5s idle timer when no tools are active and new user text arrives.
-- User prompt `content` can be string or array. Check type before accessing.
+- Buffer raw bytes and decode only complete lines. A multibyte character split across reads stays intact.
+- A line above `JSONL_MAX_LINE_BYTES` is skipped without growing the buffer.
+- A file shorter than the stored offset resets the reader to byte 0.
+- Turn end is the top-level `subtype: "turn_duration"`. Text-only turns lack it, so the 5 s text-idle timer is the fallback.
+- User `content` is a string or an array. Check the type before access.
+- `extract_events` keeps no state. Per-tool tracking lives in `Agent::apply`.

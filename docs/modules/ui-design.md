@@ -57,11 +57,12 @@ Keys are mapped in `App::update`, not here.
 
 | Input | Effect |
 |-------|--------|
-| `q`, `Esc` with nothing selected, `Ctrl+C` | Quit |
-| `Esc` with a selection | Deselect |
+| `q`, `Ctrl+C` | Quit |
+| `Esc` | Dismiss the selected character's bubble; with no bubble, deselect |
 | `←` `→` | Previous or next non-Dormant Agent |
 | `Enter` | Focus the selected Agent's terminal window |
-| Click on a character | Select; also dismiss its bubble |
+| Click on an unselected character | Select |
+| Click on the selected character | Dismiss its bubble; with no bubble, focus its terminal window |
 | Click elsewhere | Deselect |
 
 `Ctrl+C` is detected from `KeyModifiers::CONTROL` with `KeyCode::Char('c')` because raw mode delivers it as a key event.

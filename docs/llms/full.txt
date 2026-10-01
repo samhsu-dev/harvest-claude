@@ -1,36 +1,35 @@
-# Pixel Agents TUI
+# Harvest Claude
 
-> Standalone terminal application (Rust, ratatui) that renders running Claude Code agents as animated pixel-art characters in an interactive office using half-block Unicode rendering.
+> Terminal application (Rust, ratatui) that renders running Claude Code sessions as animated pixel-art farm characters using half-block Unicode rendering.
 
-Auto-detects Claude Code sessions by scanning `~/.claude/projects/` for active JSONL transcripts. View-only — no agent launching or terminal control. Renders a pixel-art office at 160×88 half-block resolution (8×8 tiles, 20×11 grid) with animated characters, furniture, and z-sorted depth. Distributable via `cargo install`.
+Detects Claude Code sessions by watching `~/.claude/projects/` for active JSONL transcripts. View-only, with terminal-window focus as the only control action. Renders a 28x16 tile farm (8x8 pixel tiles) with characters, companions, produce piles, and an agent panel showing one summary line per agent.
 
 ## Instructions for Agents
 
 - Read `docs/design.md` for type specifications and architecture.
 - Read `docs/impl.md` for Rust crate APIs and gotchas before writing integration code.
-- Use direct ratatui Buffer writes (not Canvas widget) for pixel rendering. `cell.set_symbol("▀")` + fg/bg for top/bottom pixel.
-- Use `crossterm::event::poll(Duration::from_millis(16))` for the game loop. No tokio.
-- Use `notify::recommended_watcher` + `std::sync::mpsc` for file watching on a separate thread.
-- Parse JSONL line-by-line with `serde_json::from_str::<Value>`. Buffer partial lines.
-- All sprites embedded as `const` arrays at compile time. No runtime asset loading.
-- Run `cargo clippy` and `cargo test` before considering any change complete.
+- Write pixels directly into the ratatui `Buffer` (no Canvas widget). One cell holds two vertical pixels: `▀` with fg for the top pixel and bg for the bottom pixel.
+- Drive the loop from a 16 ms tick on a plain thread. No tokio.
+- Watch files with `notify` and `std::sync::mpsc`. Poll readers every `JSONL_POLL_MS`, not every tick.
+- Parse JSONL line by line with `serde_json::from_str::<Value>`. Buffer partial lines as bytes.
+- Embed all sprites as compile-time data. No runtime asset loading.
+- Run `cargo clippy --all-targets --all-features -- -D warnings` and `cargo test --workspace --all-features` before completing any change.
 
 ## Architecture
 
-- [App & Rendering](llms/app.md): Main loop, event handling, half-block pixel renderer.
-- [Game Engine](llms/engine.md): OfficeState, character FSM, z-sorted compositing, pathfinding.
-- [Agent Detection](llms/watcher.md): Directory scanning, JSONL tailing, agent lifecycle.
-- [Sprites & Assets](llms/sprites.md): Embedded sprite data, palettes, animation frames.
+- [App & Rendering](llms/app.md): Entry order, event loop, keys, agent panel, half-block renderer.
+- [Game Engine](llms/engine.md): `OfficeState`, `Character` state machine, BFS pathfinding, warehouse.
+- [Agent Detection](llms/watcher.md): Scanner, registry, `Agent` state, timers, window focus.
+- [Sprites & Assets](llms/sprites.md): Character palettes, furniture sprites, companions, produce.
 
 ## Data Model
 
-- [Layout Format](llms/layout.md): OfficeLayout schema, compatibility with webview version.
-- [JSONL Protocol](llms/jsonl.md): Claude Code transcript record types and parsing.
+- [Layout Format](llms/layout.md): `OfficeLayout` schema, furniture catalog, load policy.
+- [JSONL Protocol](llms/jsonl.md): Transcript record types, events, turn end, reader limits.
 
 ## Optional
 
-- [Build & Distribution](llms/build.md): Cargo configuration, cross-compilation, release.
-
+- [Build & Distribution](llms/build.md): Cargo configuration, dependencies, local install.
 
 ---
 
@@ -40,81 +39,78 @@ Auto-detects Claude Code sessions by scanning `~/.claude/projects/` for active J
 
 # App & Rendering
 
-> Main loop, event handling, terminal setup, half-block pixel rendering to ratatui Buffer.
+> Entry order, event loop, key handling, agent panel, and half-block pixel rendering.
 
 ## Quick Start
 
 ```rust
-fn main() -> Result<()> {
-    color_eyre::install()?;
-    let mut terminal = ratatui::init();
-    crossterm::execute!(io::stdout(), EnableMouseCapture)?;
-    let mut app = App::new()?;
-    app.run(&mut terminal)?;
-    ratatui::restore();
-    Ok(())
-}
+// src/lib.rs::run
+color_eyre::install()?;
+tui::install_panic_hook();
+let args = Args::parse();
+let mut app = App::new(&args)?;   // before raw mode: errors print normally
+let mut terminal = TerminalGuard::new()?;
+app.run(&mut terminal)?;
 ```
+
+`src/main.rs` holds only the logging guard (`logging::init`) and a call to `run`.
 
 ## Key Files
 
 | File | Responsibility |
 |------|---------------|
-| `src/main.rs` | CLI parsing, terminal setup/teardown, panic handler |
-| `src/app.rs` | App struct, game loop, event dispatch |
-| `src/renderer.rs` | PixelBuffer compositing, half-block Buffer writes |
-| `src/ui/status_bar.rs` | Bottom status bar widget |
+| `src/app.rs` | `App`: state, tick, key and mouse handling, agent focus |
+| `src/event.rs` | `EventHandler`: crossterm thread, 16 ms tick, `Action` channel |
+| `src/tui.rs` | `TerminalGuard`, `restore_terminal`, `install_panic_hook` |
+| `src/cli.rs` | `Args` (`--layout`, `--watch-dir`) |
+| `src/logging.rs` | `init(&Path) -> Result<WorkerGuard>` file logging |
+| `src/ui/status_bar.rs` | `AgentPanel`, `AgentRow`, `ProduceCounts` |
+| `src/ui/text.rs` | `truncate_to_width`, `fit_to_width`, `draw_centered` |
+| `src/ui/input.rs` | `tile_from_cell`, `hit_test_character` |
+| `src/render/*.rs` | `bubble`, `buffer`, `colorize`, `composer`, `sprites` |
 
-## Game Loop
+## API
 
-```rust
-loop {
-    terminal.draw(|frame| app.render(frame))?;
-    if crossterm::event::poll(Duration::from_millis(16))? {
-        match crossterm::event::read()? {
-            Event::Key(key) => app.handle_key(key),
-            Event::Mouse(mouse) => app.handle_mouse(mouse),
-            Event::Resize(w, h) => app.handle_resize(w, h),
-            _ => {}
-        }
-    }
-    app.update(dt);
-    if app.should_quit { break; }
-}
-```
+| Item | Signature / meaning |
+|------|---------------------|
+| `EventHandler` | `new`, `next`, `sender` |
+| `Action` | `Tick`, `Render`, `Resize`, `Key`, `Mouse`, `Quit` |
+| `PixelBuffer` | `new`, `clear`, `blit`, `blit_flipped`, `get`, `set` |
+| `compose_scene` | `compose_scene(buf, &SceneInput)` draws tiles, furniture, characters z-sorted |
+| `tile_from_cell` | `(col, row, offset_x, offset_y) -> TilePos` |
+| `truncate_to_width` | `(text, max_width)` cuts by display columns, never inside a wide character |
 
-16ms poll = ~60fps. Rendering is diff-based (ratatui only writes changed cells).
+## Keys
 
-## Half-Block Pixel Rendering
+| Input | Effect |
+|-------|--------|
+| Left / Right | Select the previous / next non-Dormant agent |
+| Enter | Focus the terminal window of the selected agent |
+| Esc | Deselect |
+| `q`, Ctrl+C | Quit |
+| Click on a character | Select it |
+| Click on the selected character | Focus its terminal window |
 
-```rust
-// Each terminal cell = 2 vertical pixels
-fn render_pixel_pair(buf: &mut Buffer, col: u16, row: u16, top: Color, bottom: Color) {
-    if let Some(cell) = buf.cell_mut((col, row)) {
-        cell.set_symbol("▀");
-        cell.set_fg(top);
-        cell.set_bg(bottom);
-    }
-}
-```
+## Configuration
 
-PixelBuffer (160×88 RGBA) → iterate rows by 2 → write half-block pairs to Buffer.
+| Flag | Effect |
+|------|--------|
+| `--layout <path>` | Load this layout. A missing path is an error. |
+| `--watch-dir <dir>` | Scan `<dir>` in addition to `~/.claude/projects`. A missing path is an error. |
 
-## Mouse Mapping
-
-```
-cell (column, row) → pixel (column, row * 2)
-pixel (px, py) → tile (px / TILE_SIZE, py / TILE_SIZE)
-```
-
-Mouse precision: column-exact, row per-cell (cannot distinguish upper/lower half-block).
+- Log files: `~/.harvest-claude/logs`, daily rotation, at most 3 files.
+- Minimum terminal: `MIN_TERMINAL_COLS=40`, `MIN_TERMINAL_ROWS=8`. Below it the screen shows a plain notice.
+- Farm size in cells: `cols*8` columns, `rows*8/2` rows. Default grid 28x16 needs 224x64.
+- Panel text widths: `NAME_MAX_WIDTH=12`, `LABEL_MAX_WIDTH=8`.
 
 ## Gotchas
 
-- Always restore terminal on panic. Use `std::panic::set_hook` to call `ratatui::restore()`.
-- `Color::Rgb` requires `COLORTERM=truecolor`. macOS Terminal.app does NOT support it.
-- Minimum terminal size: 160 cols × 46 rows. Check on startup and resize events.
-
+- Build `App` before `TerminalGuard`. A startup error then prints on a normal screen.
+- `restore_terminal` is idempotent. The panic hook and `Drop` both call it.
+- Truncate by display width with `unicode-width`, never by `char` count. CJK characters take 2 columns.
+- The panel lists one row per non-Dormant agent plus a produce footer. Dormant agents are skipped by arrows and clicks.
+- Focus runs on a spawned thread. The UI never waits for `lsof` or `osascript`.
+- `Action` keeps every variant listed in `docs/design.md`.
 
 ---
 
@@ -122,83 +118,64 @@ Mouse precision: column-exact, row per-cell (cannot distinguish upper/lower half
 
 # Game Engine
 
-> OfficeState, character FSM, z-sorted compositing to PixelBuffer, BFS pathfinding.
+> Farm state, character state machine, pathfinding, companions, and the produce warehouse.
 
 ## Quick Start
 
 ```rust
-let layout = load_layout("~/.pixel-agents/layout.json")?;
 let mut state = OfficeState::from_layout(layout);
-state.add_character(agent_id, palette);
-// Each frame:
-state.update(dt);
-state.render(&mut pixel_buffer);
+let id = state.add_character(agent_id, palette, hue_shift);
+state.update(dt_seconds);            // every tick
+let seat = state.find_nearest_free_seat(pos);
 ```
 
 ## Key Files
 
 | File | Responsibility |
 |------|---------------|
-| `src/engine/state.rs` | OfficeState: layout, characters, furniture, seats |
-| `src/engine/character.rs` | Character FSM (IDLE → WALK → TYPE), animation |
-| `src/engine/pathfind.rs` | BFS shortest path on walkable tiles |
-| `src/engine/sprite.rs` | SpriteData type, blit with alpha compositing |
+| `src/engine/state.rs` | `OfficeState`: characters, seats, walkable tiles, furniture sprites |
+| `src/engine/character.rs` | `Character` state machine, animation, companions, delivery |
+| `src/engine/seat.rs` | `derive_seats`, `facing_from_context` |
+| `src/engine/pathfind.rs` | `bfs` over walkable tiles (4-connected) |
+| `src/engine/warehouse.rs` | `Warehouse`, `load_warehouse`, `save_warehouse`, `produce_for_anim` |
 
-## OfficeState
+## API
 
-```rust
-struct OfficeState {
-    layout: OfficeLayout,
-    tile_map: Vec<Vec<TileType>>,
-    characters: Vec<Character>,
-    furniture: Vec<FurnitureInstance>,
-    seats: Vec<Seat>,
-    blocked: HashSet<(u16, u16)>,
-    walkable: Vec<(u16, u16)>,
-}
-```
+| Item | Meaning |
+|------|---------|
+| `Character::new` | `(agent_id, pos, palette, hue_shift)` |
+| `Character::update` | `(dt, walkable, seats)` advances movement and frames |
+| `set_active`, `set_idle`, `set_waiting`, `set_permission` | Status transitions |
+| `set_dormant`, `start_dormant_walk`, `wake_from_dormant` | Dormant handling |
+| `start_delivery`, `take_delivery` | Carry produce to the barn or warehouse |
+| `add_companion`, `remove_companion` | Keyed by tool id; `CompanionKind` Chicken, Cat, Dog |
+| `Character::anim_for_tool` | Tool name to `AnimType` |
+| `Warehouse` | `add`, `count`, `total`, `tier` |
 
-## Character FSM
+Animations: `AnimType` Walk, Type, Read, Fish, Farm, Harvest. Produce: `ProduceType` Wheat, Fruit, Fish.
 
-| State | Trigger | Behavior |
-|-------|---------|----------|
-| IDLE | No active tool | Wander randomly (BFS). After 3-6 moves, rest at seat 60-120s. |
-| WALK | Path exists | Lerp between tiles at 3 tiles/sec. 2 walk frames, 200ms each. |
-| TYPE | Tool active, at seat | Typing animation (Write/Edit/Bash) or reading (Read/Grep/Glob). 400ms/frame. |
+## Configuration
 
-Directions: Down, Up, Right. Left = horizontally flipped Right sprite.
+| Constant | Value |
+|----------|-------|
+| `WALK_FRAME_MS` | 150 |
+| `TYPE_FRAME_MS` | 300 |
+| `WALK_SPEED` | 3.0 tiles per second |
+| `REST_DURATION` | 120 to 240 s |
+| `MAX_AGENTS` | 8 |
 
-## Z-Sorting
-
-All entities collected into a `Vec<Drawable>`, sorted by bottom-Y pixel coordinate:
-- Characters: `y + TILE_SIZE`.
-- Furniture: `(row + footprint_rows) * TILE_SIZE`.
-- Rendered back-to-front onto PixelBuffer via alpha-composited blit.
-
-## Sprite Compositing
-
-```rust
-fn blit(buf: &mut PixelBuffer, sprite: &SpriteData, x: i16, y: i16) {
-    for (sy, row) in sprite.pixels.iter().enumerate() {
-        for (sx, &(r, g, b, a)) in row.iter().enumerate() {
-            if a < 2 { continue; } // transparent
-            let px = x + sx as i16;
-            let py = y + sy as i16;
-            if px >= 0 && py >= 0 && (px as u16) < buf.width && (py as u16) < buf.height {
-                buf.set(px as u16, py as u16, (r, g, b, 255));
-            }
-        }
-    }
-}
-```
+- Warehouse file: `~/.harvest-claude/warehouse.json`.
 
 ## Gotchas
 
-- Delta time capped at 100ms to prevent teleporting after terminal unfocus.
-- Tile coordinates: `(col, row)` where col = x, row = y. Pixel coords: `(col * TILE_SIZE, row * TILE_SIZE)`.
-- 8×8 tiles (half of webview's 16×16). Character sprites 8×16 (half of webview's 16×32).
-- Wander uses BFS, not A*. Office grids are small enough that BFS is optimal.
-
+- Seats derive from furniture: `STUMP_*` and `FISHING_SPOT` are seats. The stump variant sets the facing direction.
+- `Character::update` counts completed wander paths in a saturating counter. Never use unchecked `u8` addition.
+- Bubbles: `BubbleKind::Permission` stays until the tool result arrives. `BubbleKind::Waiting` marks turn end.
+- A tool result in Permission state returns the character to Active and clears the bubble.
+- A background launch adds a companion. The final result for that tool id removes it.
+- `load_warehouse` returns `Result`. A corrupt file is renamed `warehouse.json.corrupt` with a warning.
+- `save_warehouse` writes a temp file and renames it. A crash leaves no partial file.
+- No matrix spawn or despawn effect exists.
 
 ---
 
@@ -206,90 +183,65 @@ fn blit(buf: &mut PixelBuffer, sprite: &SpriteData, x: i16, y: i16) {
 
 # Agent Detection
 
-> Directory scanning, JSONL tailing, agent lifecycle management.
+> Directory scanning, transcript tailing, per-agent state, timers, and window focus.
 
 ## Quick Start
 
 ```rust
-let scanner = DirectoryScanner::new(vec![
-    home.join(".claude/projects"),
-])?;
-let initial = scanner.initial_scan();
-for path in initial {
-    registry.add_agent(session_id_from(&path), path, project_name);
+let mut scanner = DirectoryScanner::new(dirs)?;   // Vec<PathBuf>
+for path in scanner.initial_scan() {
+    let id = registry.add_agent(/* session, path, project */)?;
+    registry.replay(id)?;                          // apply transcript tail
 }
+for (id, applied) in registry.poll_all() { /* update characters */ }
 ```
 
 ## Key Files
 
 | File | Responsibility |
 |------|---------------|
-| `src/watcher/scanner.rs` | Directory watching via notify, JSONL file discovery |
-| `src/watcher/jsonl.rs` | JSONL file tailing, line parsing, offset tracking |
-| `src/watcher/registry.rs` | Agent create/remove, poll all readers |
+| `src/watcher/scanner.rs` | `DirectoryScanner`, `session_info(path)`, `notify` events |
+| `src/watcher/registry.rs` | `AgentRegistry`: agents, readers, palette claims |
+| `src/watcher/agent.rs` | `Agent`: state, summary, identity |
+| `src/watcher/jsonl.rs` | `JsonlReader` tailing |
+| `src/watcher/parser.rs` | Record parsing and event extraction |
+| `src/watcher/timer.rs` | `TimerManager`, `PollInterval` |
+| `src/watcher/focus.rs` | `focus_agent_window(cwd: String)` |
 
-## Discovery Flow
+## API
 
-1. **Startup**: Scan all `~/.claude/projects/*/` directories.
-2. **Filter**: Keep `.jsonl` files with mtime < 10 minutes and size > 0 bytes.
-3. **Extract**: Session ID from filename (UUID), project name from parent directory.
-4. **Watch**: `notify::recommended_watcher` on `~/.claude/projects/` (recursive).
-5. **Ongoing**: New `.jsonl` files → new agent. Deleted/stale files → remove agent.
+| Type | Methods |
+|------|---------|
+| `DirectoryScanner` | `new(Vec<PathBuf>)`, `initial_scan`, `poll`, `forget` |
+| `AgentRegistry` | `new`, `add_agent`, `replay`, `remove_agent`, `poll_all`, `get`, `get_mut`, `agents`, `has_path` |
+| `Agent` | `new`, `apply -> ApplyOutcome`, `summary`, `display_name`, `is_running_non_exempt` |
+| `TimerManager` | `start_permission`, `cancel_permission`, `start_text_idle`, `cancel_text_idle`, `cancel_all`, `check_expired` |
+| `PollInterval` | `new`, `due` |
 
-## JSONL Tailing
+## Configuration
 
-```rust
-fn read_new_lines(&mut self) -> Vec<JsonlRecord> {
-    let mut file = File::open(&self.path)?;
-    file.seek(SeekFrom::Start(self.offset))?;
-    let mut reader = BufReader::new(file);
-    let mut results = Vec::new();
-    loop {
-        let mut line = String::new();
-        let bytes = reader.read_line(&mut line)?;
-        if bytes == 0 { break; } // EOF
-        self.offset += bytes as u64;
-        if !line.ends_with('\n') {
-            self.line_buffer.push_str(&line); // partial line
-            break;
-        }
-        let full_line = if !self.line_buffer.is_empty() {
-            let mut full = std::mem::take(&mut self.line_buffer);
-            full.push_str(&line);
-            full
-        } else { line };
-        if let Some(record) = parse_line(&full_line) {
-            results.push(record);
-        }
-    }
-    results
-}
-```
-
-## Project Hash
-
-Claude Code stores transcripts at `~/.claude/projects/<hash>/` where hash = workspace path with special characters replaced by `-`.
-
-```rust
-fn hash_path(path: &str) -> String {
-    path.replace([':', '\\', '/'], "-")
-}
-// "/Users/yichao/Projects/foo" → "-Users-yichao-Projects-foo"
-```
-
-## Stale Agent Cleanup
-
-Every 30s, check all tracked agents:
-- JSONL file deleted from disk → remove agent.
-- File mtime > 10 minutes + no active tools → mark as stale (keep but dim character).
+| Constant | Value |
+|----------|-------|
+| `PERMISSION_TIMER_MS` | 7000 |
+| text-idle timer | 5000 ms |
+| `JSONL_POLL_MS` | 500 |
+| `REPLAY_TAIL_BYTES` | 65536 |
+| Dormant after silence | 600 s |
+| Removed after silence | 7200 s |
+| `MAX_AGENTS` | 8 |
 
 ## Gotchas
 
-- `notify` on macOS uses FSEvents. Reliable for file creation/modification.
-- JSONL lines can be split mid-write. Always buffer partial lines.
-- `/clear` in Claude creates a NEW JSONL file. Old file stops growing. Scanner detects new file via `notify::EventKind::Create`.
-- Multiple Claude sessions in same project dir = multiple JSONL files. Each gets its own agent.
-
+- Discovery root is `~/.claude/projects`. `--watch-dir` adds directories.
+- `session_info` accepts `<hash>/<uuid>.jsonl`, with or without a `sessions` directory. Paths under `subagents/` are rejected.
+- The scanner drains `notify` events every tick. Readers poll on `PollInterval`.
+- A refused adoption at the agent limit calls `forget`. The next write retries it.
+- A write to a Dormant agent wakes it, regardless of the limit.
+- Replay applies the transcript tail. An adopted agent that runs a tool shows Active and its summary, with a permission timer but no bubble.
+- The agent display name is `<dir> (<branch>)` from the `Identity` event.
+- Summary precedence: running tool `<name>: <detail>`, assistant text, title, last prompt.
+- Window focus uses `Identity.cwd`: `lsof -d cwd -Fpn` finds the pid, then escaped AppleScript raises the Terminal or iTerm tab.
+- No dismiss tracking and no `/clear` tracking exist.
 
 ---
 
@@ -297,92 +249,54 @@ Every 30s, check all tracked agents:
 
 # Sprites & Assets
 
-> Embedded sprite data, character palettes, animation frames, furniture tiles.
+> Embedded character, furniture, companion, and produce sprites with palettes.
 
-## Sprite Format
+## Quick Start
 
 ```rust
-type SpriteData = Vec<Vec<(u8, u8, u8, u8)>>; // rows × cols of RGBA pixels
-// (0, 0, 0, 0) = transparent
+let sprite = character_sprite(palette, Direction::Down, AnimType::Walk, frame);
+buf.blit(&sprite, x, y);
+let pet = companion_sprite(CompanionKind::Cat, frame);
 ```
 
-All sprites embedded at compile time via `const` arrays or `include_bytes!` + decode.
+## Key Files
 
-## Character Sprites
+| File | Responsibility |
+|------|---------------|
+| `src/render/sprites.rs` | Character, companion, furniture, and produce sprite builders |
+| `src/render/colorize.rs` | Hue shift for palettes beyond the sixth agent |
+| `src/render/bubble.rs` | Permission and waiting bubbles |
+| `src/render/buffer.rs` | `PixelBuffer` |
 
-8×16 pixels (half of webview's 16×32). 6 palettes.
+## API
 
-```
-Frame layout per character:
-  Walk1  Walk2  Type1  Type2  Read1  Read2
-  8×16   8×16   8×16   8×16   8×16   8×16
+| Item | Meaning |
+|------|---------|
+| `SpriteData` | `Vec<Vec<Pixel>>`; transparent pixel is `T` |
+| Character sprite | 8x8 pixels per `(direction, anim, frame)` |
+| `companion_sprite(kind, frame)` | 8x8, two frames: normal and bob |
+| `BubbleKind` | `Permission`, `Waiting` |
+| `Direction` | `Down`, `Up`, `Left`, `Right` |
 
-Direction rows:
-  Row 0: Down
-  Row 1: Up
-  Row 2: Right (Left = flipped at runtime)
-```
+## Configuration
 
-Total per palette: 6 frames × 3 directions = 18 sprites of 8×16.
+| Constant | Value |
+|----------|-------|
+| `TILE_SIZE` | 8 pixels |
+| Palette count | 6: Farmer, Rancher, Gardener, Berry picker, Harvest worker, Fisher |
+| `WALK_FRAME_MS` | 150 |
+| `TYPE_FRAME_MS` | 300 |
 
-## Palettes
-
-6 base colors (matching webview `CHARACTER_PALETTES`):
-
-| Index | Skin | Hair | Shirt |
-|-------|------|------|-------|
-| 0 | light | brown | blue |
-| 1 | light | black | red |
-| 2 | medium | brown | green |
-| 3 | dark | black | purple |
-| 4 | light | blonde | orange |
-| 5 | medium | red | teal |
-
-Beyond 6 agents: reuse palette with hue-shifted colors.
-
-## Furniture Sprites
-
-8×8 pixels per tile (half of webview's 16×16). Simplified from webview originals.
-
-| Category | Items | Notes |
-|----------|-------|-------|
-| Desks | desk_front, desk_side | Surface for typing animation |
-| Chairs | chair_front, chair_back | Seat derivation source |
-| Electronics | monitor, laptop | Auto-state (on when agent active) |
-| Plants | plant, cactus | Decorative |
-| Storage | bookshelf | Decorative |
-
-## Floor Tiles
-
-8×8 solid color blocks. 7 patterns simplified to flat colors:
-
-| Index | Default Color |
-|-------|--------------|
-| 0 | `#5a4a3a` (dark wood) |
-| 1 | `#6b5b4b` (light wood) |
-| 2 | `#4a5a6a` (blue tile) |
-| 3 | `#5a6a5a` (green tile) |
-| 4 | `#6a6a6a` (gray) |
-| 5 | `#5a5a4a` (beige) |
-| 6 | `#3a3a4a` (dark blue) |
-
-## Wall Tiles
-
-8×16 per tile (8 wide × 16 tall for 3D effect). Solid color with darker bottom edge.
-
-## Status Bubbles
-
-Text-based (not pixel sprites):
-- Permission: `[...]` in amber
-- Waiting: `[✓]` in green
-- Active tool: `[toolname]` in white
+Colors come from the Dawnbringer 16 palette.
 
 ## Gotchas
 
-- Sprites designed for 8×8 tile grid. Webview uses 16×16. Layout loading must halve coordinates.
-- Left-facing sprites = horizontal flip of right-facing. Flip at render time, not stored separately.
-- Alpha threshold: `a < 2` treated as transparent (matches webview's `PNG_ALPHA_THRESHOLD`).
-
+- Palette index wraps at 6 (`palette % 6`). The registry assigns the least-used palette.
+- Once all 6 palettes are in use, a random hue shift is added to the next agent.
+- `Left` mirrors the `Right` sprite. Only `Down`, `Up`, and `Right` are drawn.
+- Each character sprite is 8 pixels wide and 8 tall. Each terminal cell shows two vertical pixels.
+- Sprites are compile-time data. No asset files load at runtime.
+- Produce piles grow by tier: `Warehouse::tier(produce)` selects the sprite variant.
 
 ---
 
@@ -390,68 +304,78 @@ Text-based (not pixel sprites):
 
 # Layout Format
 
-> OfficeLayout schema, tile types, persistence, compatibility with webview version.
+> `OfficeLayout` schema, furniture catalog, default farm, and load policy.
+
+## Quick Start
+
+```json
+{
+  "version": 1,
+  "cols": 28,
+  "rows": 16,
+  "layout_revision": 14,
+  "tiles": [1, 1, 2, 5, 0],
+  "furniture": [{"uid": "f1", "type": "CROP_PLOT", "col": 3, "row": 4}]
+}
+```
+
+## Key Files
+
+| File | Responsibility |
+|------|---------------|
+| `src/layout/persistence.rs` | `load_or_default`, `validate_layout`, default layout |
+| `src/layout/furniture.rs` | Catalog, footprints, seats, categories |
+| `src/types.rs` | `TileType`, `OfficeLayout`, `PlacedFurniture` |
 
 ## Schema
 
-```rust
-struct OfficeLayout {
-    version: u8,           // Must be 1
-    cols: u16,             // Grid width in tiles
-    rows: u16,             // Grid height in tiles
-    tiles: Vec<TileType>,  // Flat row-major (len = cols × rows)
-    furniture: Vec<PlacedFurniture>,
-}
+| Field | Type |
+|-------|------|
+| `version` | `u32` |
+| `cols`, `rows` | Grid size. Default 28x16, maximum 64x64 |
+| `tiles` | `Vec<u8>`, `cols*rows` entries, row-major |
+| `furniture` | `Vec<PlacedFurniture>` |
+| `tile_colors` | Optional per-tile colors |
+| `layout_revision` | Optional `u32` |
 
-struct PlacedFurniture {
-    uid: String,
-    furniture_type: String,  // Asset ID
-    col: i16,                // Can be negative (wall items)
-    row: i16,
-}
+`PlacedFurniture`: `uid`, `type`, `col: i16`, `row: i16`, optional `color`.
 
-enum TileType {
-    Void = 0,     // Transparent, non-walkable
-    Floor1 = 1,   // Walkable floor patterns 1-7
-    Floor2 = 2,
-    Floor3 = 3,
-    Floor4 = 4,
-    Floor5 = 5,
-    Floor6 = 6,
-    Floor7 = 7,
-    Wall = 100,   // Non-walkable wall
-}
-```
+`TileType`: Void 0, Grass 1, GrassDark 2, Dirt 3, DirtDark 4, Water 5, Sand 6, Stone 7, Fence 100.
 
-## Persistence
+## Furniture Catalog
 
-- File: `~/.pixel-agents/layout.json`.
-- Same format as webview version. JSON with `version`, `cols`, `rows`, `tiles`, `furniture` fields.
-- On first run: create default layout (20×11, basic office).
-- Atomic write: write to `.tmp`, rename over original.
+All entries have a 1x1 footprint.
 
-## Webview Compatibility
+| Group | Types |
+|-------|-------|
+| Crops | `CROP_PLOT`, `CROP_PLOT_ON` |
+| Seats | `STUMP_FRONT`, `STUMP_BACK`, `STUMP_LEFT`, `STUMP_RIGHT`, `FISHING_SPOT` |
+| Trees | `TREE`, `TREE_FRUIT` |
+| Structures | `CABIN_WALL`, `BARN_WALL`, `HOME`, `BARN`, `CHICKEN_COOP`, `COW_PEN`, `WELL`, `MAILBOX`, `MAILBOX_ON`, `SCARECROW` |
+| Decor | `LANTERN`, `FLOWER`, `BUSH` |
+| Produce piles | `WHEAT_PILE`, `FRUIT_BASKET`, `FISH_PILE` |
+| Fences | `FENCE_H`, `FENCE_V` |
 
-The TUI version uses 8×8 tiles; the webview uses 16×16. Layouts are stored at tile-level (not pixel-level), so the same `layout.json` works for both. The TUI just renders each tile at half the pixel resolution.
+## Configuration
 
-Furniture positions are tile-based, so they transfer directly. Visual fidelity differs but spatial layout is identical.
+- User layout path: `~/.harvest-claude/layout.json`. `--layout <path>` overrides it.
+- `BUNDLED_REVISION` = 14.
 
-## Default Layout
+## Load Policy
 
-```
-20 cols × 11 rows
-Row 0:    Wall × 20
-Row 1-2:  Floor + desks + chairs (workspace area)
-Row 3-9:  Floor + misc furniture
-Row 10:   Floor (walkway)
-```
+| State of the file | Result |
+|-------------------|--------|
+| Missing | Default layout written and used |
+| `layout_revision` below `BUNDLED_REVISION` | Copied to `layout.json.bak-r<rev>`, then replaced by the default |
+| Invalid (parse error, size mismatch, out-of-range furniture) | Default used in memory, file untouched |
+| Missing explicit `--layout` path | Error |
 
 ## Gotchas
 
-- `tiles` is a flat array, row-major. Index = `row * cols + col`.
-- Furniture `col`/`row` can be negative (wall-mounted items above the grid).
-- Grid max: 64×64. Default: 20×11.
-
+- `validate_layout` rejects furniture outside the grid and `tiles` of the wrong length.
+- Seats derive from `STUMP_*` and `FISHING_SPOT`. A layout without seats leaves agents idle.
+- Furniture categories: `desk` for crops, `seating` for seats, `electronics` for mailboxes, `building` for `HOME` and `BARN`, `decor` for the rest.
+- Add a new furniture type in the catalog and in the sprite table together.
 
 ---
 
@@ -459,87 +383,81 @@ Row 10:   Floor (walkway)
 
 # JSONL Protocol
 
-> Claude Code transcript record types, parsing rules, agent status derivation.
+> Claude Code transcript record types, event extraction, and reader limits.
 
-## File Location
+## Quick Start
 
-`~/.claude/projects/<hash>/<session-id>.jsonl`
-
-- `<hash>` = workspace path with `:`, `\`, `/` replaced by `-`.
-- `<session-id>` = UUID.
-- One file per Claude Code session. Append-only.
-
-## Record Types
-
-Each line is a self-contained JSON object with a `type` field.
-
-### assistant
-
-```json
-{"type": "assistant", "message": {"content": [
-  {"type": "tool_use", "id": "toolu_xxx", "name": "Read", "input": {...}},
-  {"type": "text", "text": "..."}
-]}}
+```rust
+let mut reader = JsonlReader::new_from_tail(path, REPLAY_TAIL_BYTES)?;
+for line in reader.read_new_lines()? {
+    for event in extract_events(&line) {   // stateless
+        agent.apply(event);
+    }
+}
 ```
 
-- `tool_use` blocks → agent tool start. Extract `id` and `name`.
-- `thinking` blocks → ignored.
+## Key Files
 
-### user
+| File | Responsibility |
+|------|---------------|
+| `src/watcher/jsonl.rs` | `JsonlReader`: byte-level tailing |
+| `src/watcher/parser.rs` | `parse_line`, `extract_events`, `tool_detail`, `is_turn_end`, `is_non_exempt_tool`, `truncate_chars` |
 
-```json
-{"type": "user", "message": {"content": [
-  {"type": "tool_result", "tool_use_id": "toolu_xxx", "content": "..."}
-]}}
-```
+## API
 
-- `tool_result` → agent tool done. Extract `tool_use_id`.
-- `content` can be string (text prompt) or array (tool results). Handle both.
+| Item | Meaning |
+|------|---------|
+| `JsonlReader::new_from_tail(path, tail)` | Start `tail` bytes before the end; discard the cut first line |
+| `JsonlReader::new_from_start(path)` | Start at byte 0 |
+| `read_new_lines()` | Complete lines since the last call, at most `JSONL_READ_CAP` bytes per call |
+| `offset()` | Current byte offset |
 
-### system
+`AgentEvent`: `ToolStart`, `ToolDone` (with `background_launch` flag), `TurnEnd`, `Text`, `Title`, `Prompt`, `Identity`.
 
-```json
-{"type": "system", "subtype": "turn_duration", "duration_ms": 1234}
-```
+## Records
 
-- `subtype == "turn_duration"` → reliable turn-end signal (~98% of tool-using turns).
-- Clear all active tools on this record. Character → IDLE.
-- Never emitted for text-only turns. Use text-idle timer (5s) as fallback.
+Location: `~/.claude/projects/<hash>/<session-id>.jsonl`. Append-only, one JSON object per line.
 
-### progress
+| `type` | Content | Event |
+|--------|---------|-------|
+| `assistant` | `tool_use` blocks (`id`, `name`, `input`) | `ToolStart` |
+| `assistant` | `text` blocks | `Text` |
+| `user` | `tool_result` blocks (`tool_use_id`) | `ToolDone` |
+| `user` | string or array prompt content | `Prompt` |
+| `system` | top-level `subtype: "turn_duration"` | `TurnEnd` |
+| `ai-title`, `custom-title` | session title | `Title` |
+| `last-prompt` | last user prompt | `Prompt` |
+| any record with `cwd` and `gitBranch` | project identity | `Identity` |
 
-```json
-{"type": "progress", "data": {"type": "agent_progress", ...}}
-```
+- `thinking` blocks are ignored.
+- A `tool_result` reading "Async agent launched successfully." sets `background_launch`. The final result of that tool id ends the companion.
 
-- `data.type == "agent_progress"` → sub-agent tool activity.
-- `data.type == "bash_progress"` → long-running Bash output (confirms tool is executing).
+## Tool Animation
 
-## Status Derivation
+| Animation | Tools |
+|-----------|-------|
+| Farm | `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, unknown tools |
+| Harvest | `Read`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `Bash`, `Execute`, `Terminal` |
 
-```
-No active tools + no recent data (>5s)     → Idle
-Active tool_use without tool_result         → Active (typing/reading)
-Active tool_use for >7s without progress    → Permission (waiting for approval)
-system turn_duration received               → Waiting (turn complete, green checkmark)
-```
+Exempt tools never start the permission timer: `Task`, `Agent`, `AskUserQuestion`.
 
-## Tool Categorization
+## Configuration
 
-| Animation | Tool Names |
-|-----------|-----------|
-| Typing | Write, Edit, Bash, Task, NotebookEdit |
-| Reading | Read, Grep, Glob, WebFetch, WebSearch |
-
-Unknown tools default to typing animation.
+| Constant | Value |
+|----------|-------|
+| `JSONL_READ_CAP` | 65536 bytes per read |
+| `JSONL_MAX_LINE_BYTES` | 8 MiB |
+| `REPLAY_TAIL_BYTES` | 65536 |
+| `JSONL_POLL_MS` | 500 |
 
 ## Gotchas
 
-- Partial lines at EOF: JSONL writes are not atomic. Buffer incomplete lines.
-- `/clear` creates a NEW JSONL file. Old file stops growing. Detect via `notify::EventKind::Create`.
-- `turn_duration` never emitted for text-only turns. Start a 5s idle timer when no tools are active and new user text arrives.
-- User prompt `content` can be string or array. Check type before accessing.
-
+- Buffer raw bytes and decode only complete lines. A multibyte character split across reads stays intact.
+- A line above `JSONL_MAX_LINE_BYTES` is skipped without growing the buffer.
+- A file shorter than the stored offset resets the reader to byte 0.
+- Turn end is the top-level `subtype: "turn_duration"`. Text-only turns lack it, so the 5 s text-idle timer is the fallback.
+- User `content` is a string or an array. Check the type before access.
+- `extract_events` keeps no state. Per-tool tracking lives in `Agent::apply`.
 
 ---
 
@@ -547,82 +465,63 @@ Unknown tools default to typing animation.
 
 # Build & Distribution
 
-> Cargo configuration, cross-compilation, release packaging.
+> Cargo configuration, dependencies, and local install.
 
-## Build
-
-```bash
-cargo build                    # Debug build
-cargo build --release          # Optimized release build
-cargo clippy                   # Lint
-cargo test                     # Run tests
-cargo run                      # Run debug build
-cargo run --release             # Run release build
-```
-
-## Cargo.toml
-
-```toml
-[package]
-name = "pixel-agents-tui"
-version = "0.1.0"
-edition = "2024"
-description = "Pixel art office for your Claude Code agents — in the terminal"
-license = "MIT"
-repository = "https://github.com/user/pixel-agents-tui"
-
-[dependencies]
-ratatui = "0.30"
-crossterm = "0.29"
-notify = "8.2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-dirs = "6"
-clap = { version = "4.6", features = ["derive"] }
-rand = "0.10"
-color-eyre = "0.6"
-tracing = "0.1"
-tracing-subscriber = "0.3"
-
-[profile.release]
-lto = true
-codegen-units = 1
-strip = true
-```
-
-## Distribution
-
-| Method | Command | Requires |
-|--------|---------|----------|
-| crates.io | `cargo install pixel-agents-tui` | Rust toolchain |
-| cargo-binstall | `cargo binstall pixel-agents-tui` | cargo-binstall |
-| GitHub Releases | Download binary | Nothing |
-| Homebrew | `brew install pixel-agents-tui` | Homebrew |
-
-## Cross-Compilation
+## Quick Start
 
 ```bash
-# macOS ARM → Linux x86_64
-cargo install cross
-cross build --release --target x86_64-unknown-linux-gnu
-
-# GitHub Actions matrix:
-# - x86_64-unknown-linux-gnu
-# - x86_64-apple-darwin
-# - aarch64-apple-darwin
-# - x86_64-pc-windows-msvc
+cargo build --release
+cargo install --path .
+harvest-claude
 ```
 
-## Binary Size
+## Key Files
 
-With `lto = true`, `strip = true`, `codegen-units = 1`: ~5-8MB static binary. No runtime dependencies.
+| File | Responsibility |
+|------|---------------|
+| `Cargo.toml` | Package `harvest-claude` 0.1.0, edition 2024 |
+| `rust-toolchain.toml` | Toolchain pin |
+| `src/main.rs` | Entry point only |
+| `src/lib.rs` | `run` and module declarations |
+
+## Dependencies
+
+| Crate | Version | Use |
+|-------|---------|-----|
+| `ratatui` | 0.30 | Terminal UI |
+| `crossterm` | 0.29 | Terminal events and raw mode |
+| `notify` | 8 | File watching |
+| `serde` | 1 (derive) | Serialization |
+| `serde_json` | 1 | JSON parsing |
+| `dirs` | 6 | Home directory |
+| `clap` | 4 (derive) | CLI arguments |
+| `rand` | 0.9 | Wander and hue shift |
+| `color-eyre` | 0.6 | Error reports |
+| `tracing` | 0.1 | Log events |
+| `tracing-subscriber` | 0.3 (env-filter) | Log filtering |
+| `tracing-appender` | 0.2.5 | Rotating log files |
+| `unicode-width` | 0.2.2 | Display width |
+
+Dev dependencies: `rstest` 0.27.0, `tempfile` 3.
+
+## Configuration
+
+Quality gate:
+
+```bash
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+```
+
+Runtime files live in `~/.harvest-claude`: `layout.json`, `warehouse.json`, `logs/`.
 
 ## Gotchas
 
-- `cargo install` compiles from source (2-3 minutes). Publish pre-built binaries for fast installation.
-- `edition = "2024"` requires Rust 1.85+. Use `edition = "2021"` for wider compatibility.
-- Embedded sprites (`const` arrays) increase binary size by ~100KB. Negligible.
-
+- Window focus needs macOS (`lsof`, `osascript`). Other platforms run without focus.
+- Set `RUST_LOG` to filter log output. Logs go to files, never to the terminal.
+- No CI workflow and no published-crate release exist in the repository.
 
 ---
 

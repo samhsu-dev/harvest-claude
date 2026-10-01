@@ -1,76 +1,74 @@
 # App & Rendering
 
-> Main loop, event handling, terminal setup, half-block pixel rendering to ratatui Buffer.
+> Entry order, event loop, key handling, agent panel, and half-block pixel rendering.
 
 ## Quick Start
 
 ```rust
-fn main() -> Result<()> {
-    color_eyre::install()?;
-    let mut terminal = ratatui::init();
-    crossterm::execute!(io::stdout(), EnableMouseCapture)?;
-    let mut app = App::new()?;
-    app.run(&mut terminal)?;
-    ratatui::restore();
-    Ok(())
-}
+// src/lib.rs::run
+color_eyre::install()?;
+tui::install_panic_hook();
+let args = Args::parse();
+let mut app = App::new(&args)?;   // before raw mode: errors print normally
+let mut terminal = TerminalGuard::new()?;
+app.run(&mut terminal)?;
 ```
+
+`src/main.rs` holds only the logging guard (`logging::init`) and a call to `run`.
 
 ## Key Files
 
 | File | Responsibility |
 |------|---------------|
-| `src/main.rs` | CLI parsing, terminal setup/teardown, panic handler |
-| `src/app.rs` | App struct, game loop, event dispatch |
-| `src/renderer.rs` | PixelBuffer compositing, half-block Buffer writes |
-| `src/ui/status_bar.rs` | Bottom status bar widget |
+| `src/app.rs` | `App`: state, tick, key and mouse handling, agent focus |
+| `src/event.rs` | `EventHandler`: crossterm thread, 16 ms tick, `Action` channel |
+| `src/tui.rs` | `TerminalGuard`, `restore_terminal`, `install_panic_hook` |
+| `src/cli.rs` | `Args` (`--layout`, `--watch-dir`) |
+| `src/logging.rs` | `init(&Path) -> Result<WorkerGuard>` file logging |
+| `src/ui/status_bar.rs` | `AgentPanel`, `AgentRow`, `ProduceCounts` |
+| `src/ui/text.rs` | `truncate_to_width`, `fit_to_width`, `draw_centered` |
+| `src/ui/input.rs` | `tile_from_cell`, `hit_test_character` |
+| `src/render/*.rs` | `bubble`, `buffer`, `colorize`, `composer`, `sprites` |
 
-## Game Loop
+## API
 
-```rust
-loop {
-    terminal.draw(|frame| app.render(frame))?;
-    if crossterm::event::poll(Duration::from_millis(16))? {
-        match crossterm::event::read()? {
-            Event::Key(key) => app.handle_key(key),
-            Event::Mouse(mouse) => app.handle_mouse(mouse),
-            Event::Resize(w, h) => app.handle_resize(w, h),
-            _ => {}
-        }
-    }
-    app.update(dt);
-    if app.should_quit { break; }
-}
-```
+| Item | Signature / meaning |
+|------|---------------------|
+| `EventHandler` | `new`, `next`, `sender` |
+| `Action` | `Tick`, `Render`, `Resize`, `Key`, `Mouse`, `Quit` |
+| `PixelBuffer` | `new`, `clear`, `blit`, `blit_flipped`, `get`, `set` |
+| `compose_scene` | `compose_scene(buf, &SceneInput)` draws tiles, furniture, characters z-sorted |
+| `tile_from_cell` | `(col, row, offset_x, offset_y) -> TilePos` |
+| `truncate_to_width` | `(text, max_width)` cuts by display columns, never inside a wide character |
 
-16ms poll = ~60fps. Rendering is diff-based (ratatui only writes changed cells).
+## Keys
 
-## Half-Block Pixel Rendering
+| Input | Effect |
+|-------|--------|
+| Left / Right | Select the previous / next non-Dormant agent |
+| Enter | Focus the terminal window of the selected agent |
+| Esc | Deselect |
+| `q`, Ctrl+C | Quit |
+| Click on a character | Select it |
+| Click on the selected character | Focus its terminal window |
 
-```rust
-// Each terminal cell = 2 vertical pixels
-fn render_pixel_pair(buf: &mut Buffer, col: u16, row: u16, top: Color, bottom: Color) {
-    if let Some(cell) = buf.cell_mut((col, row)) {
-        cell.set_symbol("▀");
-        cell.set_fg(top);
-        cell.set_bg(bottom);
-    }
-}
-```
+## Configuration
 
-PixelBuffer (160×88 RGBA) → iterate rows by 2 → write half-block pairs to Buffer.
+| Flag | Effect |
+|------|--------|
+| `--layout <path>` | Load this layout. A missing path is an error. |
+| `--watch-dir <dir>` | Scan `<dir>` in addition to `~/.claude/projects`. A missing path is an error. |
 
-## Mouse Mapping
-
-```
-cell (column, row) → pixel (column, row * 2)
-pixel (px, py) → tile (px / TILE_SIZE, py / TILE_SIZE)
-```
-
-Mouse precision: column-exact, row per-cell (cannot distinguish upper/lower half-block).
+- Log files: `~/.harvest-claude/logs`, daily rotation, at most 3 files.
+- Minimum terminal: `MIN_TERMINAL_COLS=40`, `MIN_TERMINAL_ROWS=8`. Below it the screen shows a plain notice.
+- Farm size in cells: `cols*8` columns, `rows*8/2` rows. Default grid 28x16 needs 224x64.
+- Panel text widths: `NAME_MAX_WIDTH=12`, `LABEL_MAX_WIDTH=8`.
 
 ## Gotchas
 
-- Always restore terminal on panic. Use `std::panic::set_hook` to call `ratatui::restore()`.
-- `Color::Rgb` requires `COLORTERM=truecolor`. macOS Terminal.app does NOT support it.
-- Minimum terminal size: 160 cols × 46 rows. Check on startup and resize events.
+- Build `App` before `TerminalGuard`. A startup error then prints on a normal screen.
+- `restore_terminal` is idempotent. The panic hook and `Drop` both call it.
+- Truncate by display width with `unicode-width`, never by `char` count. CJK characters take 2 columns.
+- The panel lists one row per non-Dormant agent plus a produce footer. Dormant agents are skipped by arrows and clicks.
+- Focus runs on a spawned thread. The UI never waits for `lsof` or `osascript`.
+- `Action` keeps every variant listed in `docs/design.md`.

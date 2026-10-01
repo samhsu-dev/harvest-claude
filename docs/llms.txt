@@ -1,32 +1,32 @@
-# Pixel Agents TUI
+# Harvest Claude
 
-> Standalone terminal application (Rust, ratatui) that renders running Claude Code agents as animated pixel-art characters in an interactive office using half-block Unicode rendering.
+> Terminal application (Rust, ratatui) that renders running Claude Code sessions as animated pixel-art farm characters using half-block Unicode rendering.
 
-Auto-detects Claude Code sessions by scanning `~/.claude/projects/` for active JSONL transcripts. View-only — no agent launching or terminal control. Renders a pixel-art office at 160×88 half-block resolution (8×8 tiles, 20×11 grid) with animated characters, furniture, and z-sorted depth. Distributable via `cargo install`.
+Detects Claude Code sessions by watching `~/.claude/projects/` for active JSONL transcripts. View-only, with terminal-window focus as the only control action. Renders a 28x16 tile farm (8x8 pixel tiles) with characters, companions, produce piles, and an agent panel showing one summary line per agent.
 
 ## Instructions for Agents
 
 - Read `docs/design.md` for type specifications and architecture.
 - Read `docs/impl.md` for Rust crate APIs and gotchas before writing integration code.
-- Use direct ratatui Buffer writes (not Canvas widget) for pixel rendering. `cell.set_symbol("▀")` + fg/bg for top/bottom pixel.
-- Use `crossterm::event::poll(Duration::from_millis(16))` for the game loop. No tokio.
-- Use `notify::recommended_watcher` + `std::sync::mpsc` for file watching on a separate thread.
-- Parse JSONL line-by-line with `serde_json::from_str::<Value>`. Buffer partial lines.
-- All sprites embedded as `const` arrays at compile time. No runtime asset loading.
-- Run `cargo clippy` and `cargo test` before considering any change complete.
+- Write pixels directly into the ratatui `Buffer` (no Canvas widget). One cell holds two vertical pixels: `▀` with fg for the top pixel and bg for the bottom pixel.
+- Drive the loop from a 16 ms tick on a plain thread. No tokio.
+- Watch files with `notify` and `std::sync::mpsc`. Poll readers every `JSONL_POLL_MS`, not every tick.
+- Parse JSONL line by line with `serde_json::from_str::<Value>`. Buffer partial lines as bytes.
+- Embed all sprites as compile-time data. No runtime asset loading.
+- Run `cargo clippy --all-targets --all-features -- -D warnings` and `cargo test --workspace --all-features` before completing any change.
 
 ## Architecture
 
-- [App & Rendering](llms/app.md): Main loop, event handling, half-block pixel renderer.
-- [Game Engine](llms/engine.md): OfficeState, character FSM, z-sorted compositing, pathfinding.
-- [Agent Detection](llms/watcher.md): Directory scanning, JSONL tailing, agent lifecycle.
-- [Sprites & Assets](llms/sprites.md): Embedded sprite data, palettes, animation frames.
+- [App & Rendering](llms/app.md): Entry order, event loop, keys, agent panel, half-block renderer.
+- [Game Engine](llms/engine.md): `OfficeState`, `Character` state machine, BFS pathfinding, warehouse.
+- [Agent Detection](llms/watcher.md): Scanner, registry, `Agent` state, timers, window focus.
+- [Sprites & Assets](llms/sprites.md): Character palettes, furniture sprites, companions, produce.
 
 ## Data Model
 
-- [Layout Format](llms/layout.md): OfficeLayout schema, compatibility with webview version.
-- [JSONL Protocol](llms/jsonl.md): Claude Code transcript record types and parsing.
+- [Layout Format](llms/layout.md): `OfficeLayout` schema, furniture catalog, load policy.
+- [JSONL Protocol](llms/jsonl.md): Transcript record types, events, turn end, reader limits.
 
 ## Optional
 
-- [Build & Distribution](llms/build.md): Cargo configuration, cross-compilation, release.
+- [Build & Distribution](llms/build.md): Cargo configuration, dependencies, local install.

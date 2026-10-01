@@ -1,77 +1,59 @@
 # Build & Distribution
 
-> Cargo configuration, cross-compilation, release packaging.
+> Cargo configuration, dependencies, and local install.
 
-## Build
-
-```bash
-cargo build                    # Debug build
-cargo build --release          # Optimized release build
-cargo clippy                   # Lint
-cargo test                     # Run tests
-cargo run                      # Run debug build
-cargo run --release             # Run release build
-```
-
-## Cargo.toml
-
-```toml
-[package]
-name = "pixel-agents-tui"
-version = "0.1.0"
-edition = "2024"
-description = "Pixel art office for your Claude Code agents — in the terminal"
-license = "MIT"
-repository = "https://github.com/user/pixel-agents-tui"
-
-[dependencies]
-ratatui = "0.30"
-crossterm = "0.29"
-notify = "8.2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-dirs = "6"
-clap = { version = "4.6", features = ["derive"] }
-rand = "0.10"
-color-eyre = "0.6"
-tracing = "0.1"
-tracing-subscriber = "0.3"
-
-[profile.release]
-lto = true
-codegen-units = 1
-strip = true
-```
-
-## Distribution
-
-| Method | Command | Requires |
-|--------|---------|----------|
-| crates.io | `cargo install pixel-agents-tui` | Rust toolchain |
-| cargo-binstall | `cargo binstall pixel-agents-tui` | cargo-binstall |
-| GitHub Releases | Download binary | Nothing |
-| Homebrew | `brew install pixel-agents-tui` | Homebrew |
-
-## Cross-Compilation
+## Quick Start
 
 ```bash
-# macOS ARM → Linux x86_64
-cargo install cross
-cross build --release --target x86_64-unknown-linux-gnu
-
-# GitHub Actions matrix:
-# - x86_64-unknown-linux-gnu
-# - x86_64-apple-darwin
-# - aarch64-apple-darwin
-# - x86_64-pc-windows-msvc
+cargo build --release
+cargo install --path .
+harvest-claude
 ```
 
-## Binary Size
+## Key Files
 
-With `lto = true`, `strip = true`, `codegen-units = 1`: ~5-8MB static binary. No runtime dependencies.
+| File | Responsibility |
+|------|---------------|
+| `Cargo.toml` | Package `harvest-claude` 0.1.0, edition 2024 |
+| `rust-toolchain.toml` | Toolchain pin |
+| `src/main.rs` | Entry point only |
+| `src/lib.rs` | `run` and module declarations |
+
+## Dependencies
+
+| Crate | Version | Use |
+|-------|---------|-----|
+| `ratatui` | 0.30 | Terminal UI |
+| `crossterm` | 0.29 | Terminal events and raw mode |
+| `notify` | 8 | File watching |
+| `serde` | 1 (derive) | Serialization |
+| `serde_json` | 1 | JSON parsing |
+| `dirs` | 6 | Home directory |
+| `clap` | 4 (derive) | CLI arguments |
+| `rand` | 0.9 | Wander and hue shift |
+| `color-eyre` | 0.6 | Error reports |
+| `tracing` | 0.1 | Log events |
+| `tracing-subscriber` | 0.3 (env-filter) | Log filtering |
+| `tracing-appender` | 0.2.5 | Rotating log files |
+| `unicode-width` | 0.2.2 | Display width |
+
+Dev dependencies: `rstest` 0.27.0, `tempfile` 3.
+
+## Configuration
+
+Quality gate:
+
+```bash
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+```
+
+Runtime files live in `~/.harvest-claude`: `layout.json`, `warehouse.json`, `logs/`.
 
 ## Gotchas
 
-- `cargo install` compiles from source (2-3 minutes). Publish pre-built binaries for fast installation.
-- `edition = "2024"` requires Rust 1.85+. Use `edition = "2021"` for wider compatibility.
-- Embedded sprites (`const` arrays) increase binary size by ~100KB. Negligible.
+- Window focus needs macOS (`lsof`, `osascript`). Other platforms run without focus.
+- Set `RUST_LOG` to filter log output. Logs go to files, never to the terminal.
+- No CI workflow and no published-crate release exist in the repository.

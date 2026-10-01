@@ -8,11 +8,11 @@
 
 **Data Flow**
 - **Inputs:** JSONL session transcripts written by Claude Code under `~/.claude/projects/`, file system events on those files, keyboard and mouse input, a layout file and a warehouse file under `~/.harvest-claude/`.
-- **Outputs:** terminal pixel rendering, status bar text, persisted warehouse counts, a size-bounded diagnostic log under `~/.harvest-claude/`.
+- **Outputs:** terminal pixel rendering, agent panel text, persisted warehouse counts, a size-bounded diagnostic log under `~/.harvest-claude/`.
 - **Connections:** Claude Code CLI → Session Transcript → Scanner / Reader → Parser → Agent Events → App → Renderer → Terminal.
 
 **Scope Boundaries**
-- **Owned:** session discovery, transcript parsing, agent status inference, activity summary, farm rendering, character animation, produce and warehouse, status bar, terminal lifecycle safety, layout loading.
+- **Owned:** session discovery, transcript parsing, agent status inference, activity summary, farm rendering, character animation, produce and warehouse, agent panel, terminal lifecycle safety, layout loading.
 - **Not Owned:** Claude Code CLI behaviour, the transcript format, terminal emulator capabilities, launching or controlling agents (view only), layout editing (no editor in this application).
 
 ## 2. Concepts
@@ -47,7 +47,7 @@ Keyboard / Mouse ──▶ Action ──▶ App (agents, timers, farm) ──▶
 - **Agent Status**
   - **Definition:** The inferred state of an agent: Active (a tool-use was seen since the last turn end), Idle (adopted or woken, no tool-use seen yet), Waiting (turn ended or text-only reply settled, awaiting the user), Permission (a tool awaits user approval), Dormant (no transcript writes for a long time).
   - **Scope:** Derived from Agent Events and Heuristic Timers. Never read from a definitive signal; Claude Code does not record permission prompts in the transcript.
-  - **Relationships:** Drives Character animation, Speech Bubble, status bar text, and Dormancy. Transition rules: `model.md`.
+  - **Relationships:** Drives Character animation, Speech Bubble, agent panel text, and Dormancy. Transition rules: `model.md`.
 
 - **Tool Activity**
   - **Definition:** One tool invocation from its `tool_use` block to its matching `tool_result` block.
@@ -60,14 +60,14 @@ Keyboard / Mouse ──▶ Action ──▶ App (agents, timers, farm) ──▶
   - **Relationships:** Turn end clears every foreground Tool Activity, cancels timers, and moves the Agent to Waiting.
 
 - **Activity Summary**
-  - **Definition:** A one-line, human-readable statement of what an agent is doing right now, shown in the status bar and above the selected character.
+  - **Definition:** A one-line, human-readable statement of what an agent is doing right now, shown in the agent panel.
   - **Scope:** Sources, in precedence order: the running tool's detail, the first line of the latest assistant text, the session title Claude Code assigned, the last user prompt. Truncated by display width, never by byte. Precedence semantics: `model.md`.
-  - **Relationships:** Derived from Tool Activity and transcript metadata records. Owned by the Agent, rendered by the status bar.
+  - **Relationships:** Derived from Tool Activity and transcript metadata records. Owned by the Agent, rendered by the agent panel.
 
 - **Project Identity**
   - **Definition:** The human-readable origin of a session: the working directory name and the git branch recorded in every transcript record.
   - **Scope:** Falls back to the project hash directory name until the first record arrives. Replaces the raw hash in all user-facing text.
-  - **Relationships:** Owned by the Agent. Shown in the status bar and used by terminal-window focus.
+  - **Relationships:** Owned by the Agent. Shown in the agent panel and used by terminal-window focus.
 
 - **Heuristic Timer**
   - **Definition:** A per-agent timer that infers a status Claude Code never writes down. Two kinds: permission (a non-exempt tool has run for 7 s without a result) and text-idle (a text-only reply has had no follow-up for 5 s).
@@ -92,7 +92,7 @@ Keyboard / Mouse ──▶ Action ──▶ App (agents, timers, farm) ──▶
 - **Produce and Warehouse**
   - **Definition:** A reward token (wheat, fruit, fish) a Character earns when a turn ends at a work Seat, carried to the barn and counted in the persisted Warehouse.
   - **Scope:** Counts only. Persisted atomically under `~/.harvest-claude/`. A corrupt file is reported, never silently reset.
-  - **Relationships:** Produced by Turn end at a Seat. Displayed in the status bar and as piles beside the barn.
+  - **Relationships:** Produced by Turn end at a Seat. Displayed in the agent panel and as piles beside the barn.
 
 - **Companion**
   - **Definition:** A small animal (chicken, cat, dog) that follows a Character while that agent has a background sub-agent running.
@@ -115,13 +115,13 @@ Keyboard / Mouse ──▶ Action ──▶ App (agents, timers, farm) ──▶
   - **Relationships:** Owned by the Agent registry, applied at sprite colorization.
 
 - **Layout**
-  - **Definition:** The serialized farm description: grid size, tile types, furniture positions, optional tile colors, layout revision. Same file format as the pixel-agents VS Code extension.
+  - **Definition:** The serialized farm description: grid size, tile types, furniture positions, optional tile colors, layout revision.
   - **Scope:** Read from `~/.harvest-claude/layout.json` or the `--layout` path; the bundled default is used when none exists. Validated on load; an invalid file is reported, never replaced.
   - **Relationships:** Layout → Farm. A revision number marks the bundled default only; user layouts are kept as written.
 
 - **Half-Block Pixel**
   - **Definition:** The rendering primitive: one terminal cell shows two vertical pixels using `▀` with foreground (top) and background (bottom) colors.
-  - **Scope:** Requires a 24-bit color terminal. A 28×16 grid needs 224 columns × 64 rows plus the status bar.
+  - **Scope:** Requires a 24-bit color terminal. A 28×16 grid needs 224 columns × 64 rows plus the agent panel.
   - **Relationships:** Pixel buffer → half-block cells → terminal.
 
 - **Terminal Guard**
@@ -145,17 +145,17 @@ Keyboard / Mouse ──▶ Action ──▶ App (agents, timers, farm) ──▶
 4. **Parsing** — each record yields Agent Events (tool start with detail, tool done with error flag, turn end, text reply, title, prompt, identity) → App updates the Agent and its timers.
 5. **Inference** — Heuristic Timers expire → Permission or Waiting status → Speech Bubble. A tool result or turn end clears the bubble and cancels the timer.
 6. **Reward** — turn end at a work Seat → Produce → delivery walk → Warehouse count → atomic save.
-7. **Rendering** — on each frame the Farm composes tiles, furniture, Characters, Companions, Bubbles into the pixel buffer → half-block cells → status bar with Project Identity, Agent Status, and Activity Summary for the selected agent.
+7. **Rendering** — on each frame the Farm composes tiles, furniture, Characters, Companions, Bubbles into the pixel buffer → half-block cells → agent panel with one row per active agent showing Project Identity, Agent Status, and Activity Summary.
 
 ## 4. Scenarios
 
-- **Typical:** The developer runs `harvest-claude` with three sessions open. Three workers spawn, walk to crop plots, and farm. The status bar shows each project name and branch. The selected worker's line reads "Bash: cargo test --workspace". One turn ends: that worker shows a check bubble, carries wheat to the barn, then wanders.
+- **Typical:** The developer runs `harvest-claude` with three sessions open. Three workers spawn, walk to crop plots, and farm. The agent panel lists one row per worker with project name and branch. The selected worker's row reads "Bash: cargo test --workspace". One turn ends: that worker shows a check bubble, carries wheat to the barn, then wanders.
 
 - **Boundary:** A tool runs for 7 s with no result. The worker shows an amber "..." bubble. The result arrives: the bubble clears without user action and the worker keeps farming. A text-only reply with thinking blocks does not start the idle timer until its text block is written.
 
 - **Boundary:** The terminal is narrower than the grid needs. The application shows a one-line size requirement instead of a clipped scene and resumes when the window grows. A panic restores the terminal before the error is printed.
 
-- **Interaction:** The developer clicks a worker. The status bar expands to that agent's project, branch, status, running tool, and summary line. Clicking again raises the agent's terminal window to the front.
+- **Interaction:** The developer clicks a worker. Its panel row is highlighted. Clicking again raises the agent's terminal window to the front.
 
 - **Sub-agent:** The agent launches a background sub-agent. A chicken appears beside the worker and follows it. The sub-agent finishes and the chicken leaves. The sub-agent's own transcript is never shown as a separate worker.
 

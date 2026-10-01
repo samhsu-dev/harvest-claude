@@ -1,85 +1,61 @@
 # Agent Detection
 
-> Directory scanning, JSONL tailing, agent lifecycle management.
+> Directory scanning, transcript tailing, per-agent state, timers, and window focus.
 
 ## Quick Start
 
 ```rust
-let scanner = DirectoryScanner::new(vec![
-    home.join(".claude/projects"),
-])?;
-let initial = scanner.initial_scan();
-for path in initial {
-    registry.add_agent(session_id_from(&path), path, project_name);
+let mut scanner = DirectoryScanner::new(dirs)?;   // Vec<PathBuf>
+for path in scanner.initial_scan() {
+    let id = registry.add_agent(/* session, path, project */)?;
+    registry.replay(id)?;                          // apply transcript tail
 }
+for (id, applied) in registry.poll_all() { /* update characters */ }
 ```
 
 ## Key Files
 
 | File | Responsibility |
 |------|---------------|
-| `src/watcher/scanner.rs` | Directory watching via notify, JSONL file discovery |
-| `src/watcher/jsonl.rs` | JSONL file tailing, line parsing, offset tracking |
-| `src/watcher/registry.rs` | Agent create/remove, poll all readers |
+| `src/watcher/scanner.rs` | `DirectoryScanner`, `session_info(path)`, `notify` events |
+| `src/watcher/registry.rs` | `AgentRegistry`: agents, readers, palette claims |
+| `src/watcher/agent.rs` | `Agent`: state, summary, identity |
+| `src/watcher/jsonl.rs` | `JsonlReader` tailing |
+| `src/watcher/parser.rs` | Record parsing and event extraction |
+| `src/watcher/timer.rs` | `TimerManager`, `PollInterval` |
+| `src/watcher/focus.rs` | `focus_agent_window(cwd: String)` |
 
-## Discovery Flow
+## API
 
-1. **Startup**: Scan all `~/.claude/projects/*/` directories.
-2. **Filter**: Keep `.jsonl` files with mtime < 10 minutes and size > 0 bytes.
-3. **Extract**: Session ID from filename (UUID), project name from parent directory.
-4. **Watch**: `notify::recommended_watcher` on `~/.claude/projects/` (recursive).
-5. **Ongoing**: New `.jsonl` files → new agent. Deleted/stale files → remove agent.
+| Type | Methods |
+|------|---------|
+| `DirectoryScanner` | `new(Vec<PathBuf>)`, `initial_scan`, `poll`, `forget` |
+| `AgentRegistry` | `new`, `add_agent`, `replay`, `remove_agent`, `poll_all`, `get`, `get_mut`, `agents`, `has_path` |
+| `Agent` | `new`, `apply -> ApplyOutcome`, `summary`, `display_name`, `is_running_non_exempt` |
+| `TimerManager` | `start_permission`, `cancel_permission`, `start_text_idle`, `cancel_text_idle`, `cancel_all`, `check_expired` |
+| `PollInterval` | `new`, `due` |
 
-## JSONL Tailing
+## Configuration
 
-```rust
-fn read_new_lines(&mut self) -> Vec<JsonlRecord> {
-    let mut file = File::open(&self.path)?;
-    file.seek(SeekFrom::Start(self.offset))?;
-    let mut reader = BufReader::new(file);
-    let mut results = Vec::new();
-    loop {
-        let mut line = String::new();
-        let bytes = reader.read_line(&mut line)?;
-        if bytes == 0 { break; } // EOF
-        self.offset += bytes as u64;
-        if !line.ends_with('\n') {
-            self.line_buffer.push_str(&line); // partial line
-            break;
-        }
-        let full_line = if !self.line_buffer.is_empty() {
-            let mut full = std::mem::take(&mut self.line_buffer);
-            full.push_str(&line);
-            full
-        } else { line };
-        if let Some(record) = parse_line(&full_line) {
-            results.push(record);
-        }
-    }
-    results
-}
-```
-
-## Project Hash
-
-Claude Code stores transcripts at `~/.claude/projects/<hash>/` where hash = workspace path with special characters replaced by `-`.
-
-```rust
-fn hash_path(path: &str) -> String {
-    path.replace([':', '\\', '/'], "-")
-}
-// "/Users/yichao/Projects/foo" → "-Users-yichao-Projects-foo"
-```
-
-## Stale Agent Cleanup
-
-Every 30s, check all tracked agents:
-- JSONL file deleted from disk → remove agent.
-- File mtime > 10 minutes + no active tools → mark as stale (keep but dim character).
+| Constant | Value |
+|----------|-------|
+| `PERMISSION_TIMER_MS` | 7000 |
+| text-idle timer | 5000 ms |
+| `JSONL_POLL_MS` | 500 |
+| `REPLAY_TAIL_BYTES` | 65536 |
+| Dormant after silence | 600 s |
+| Removed after silence | 7200 s |
+| `MAX_AGENTS` | 8 |
 
 ## Gotchas
 
-- `notify` on macOS uses FSEvents. Reliable for file creation/modification.
-- JSONL lines can be split mid-write. Always buffer partial lines.
-- `/clear` in Claude creates a NEW JSONL file. Old file stops growing. Scanner detects new file via `notify::EventKind::Create`.
-- Multiple Claude sessions in same project dir = multiple JSONL files. Each gets its own agent.
+- Discovery root is `~/.claude/projects`. `--watch-dir` adds directories.
+- `session_info` accepts `<hash>/<uuid>.jsonl`, with or without a `sessions` directory. Paths under `subagents/` are rejected.
+- The scanner drains `notify` events every tick. Readers poll on `PollInterval`.
+- A refused adoption at the agent limit calls `forget`. The next write retries it.
+- A write to a Dormant agent wakes it, regardless of the limit.
+- Replay applies the transcript tail. An adopted agent that runs a tool shows Active and its summary, with a permission timer but no bubble.
+- The agent display name is `<dir> (<branch>)` from the `Identity` event.
+- Summary precedence: running tool `<name>: <detail>`, assistant text, title, last prompt.
+- Window focus uses `Identity.cwd`: `lsof -d cwd -Fpn` finds the pid, then escaped AppleScript raises the Terminal or iTerm tab.
+- No dismiss tracking and no `/clear` tracking exist.

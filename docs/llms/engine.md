@@ -1,78 +1,60 @@
 # Game Engine
 
-> OfficeState, character FSM, z-sorted compositing to PixelBuffer, BFS pathfinding.
+> Farm state, character state machine, pathfinding, companions, and the produce warehouse.
 
 ## Quick Start
 
 ```rust
-let layout = load_layout("~/.pixel-agents/layout.json")?;
 let mut state = OfficeState::from_layout(layout);
-state.add_character(agent_id, palette);
-// Each frame:
-state.update(dt);
-state.render(&mut pixel_buffer);
+let id = state.add_character(agent_id, palette, hue_shift);
+state.update(dt_seconds);            // every tick
+let seat = state.find_nearest_free_seat(pos);
 ```
 
 ## Key Files
 
 | File | Responsibility |
 |------|---------------|
-| `src/engine/state.rs` | OfficeState: layout, characters, furniture, seats |
-| `src/engine/character.rs` | Character FSM (IDLE → WALK → TYPE), animation |
-| `src/engine/pathfind.rs` | BFS shortest path on walkable tiles |
-| `src/engine/sprite.rs` | SpriteData type, blit with alpha compositing |
+| `src/engine/state.rs` | `OfficeState`: characters, seats, walkable tiles, furniture sprites |
+| `src/engine/character.rs` | `Character` state machine, animation, companions, delivery |
+| `src/engine/seat.rs` | `derive_seats`, `facing_from_context` |
+| `src/engine/pathfind.rs` | `bfs` over walkable tiles (4-connected) |
+| `src/engine/warehouse.rs` | `Warehouse`, `load_warehouse`, `save_warehouse`, `produce_for_anim` |
 
-## OfficeState
+## API
 
-```rust
-struct OfficeState {
-    layout: OfficeLayout,
-    tile_map: Vec<Vec<TileType>>,
-    characters: Vec<Character>,
-    furniture: Vec<FurnitureInstance>,
-    seats: Vec<Seat>,
-    blocked: HashSet<(u16, u16)>,
-    walkable: Vec<(u16, u16)>,
-}
-```
+| Item | Meaning |
+|------|---------|
+| `Character::new` | `(agent_id, pos, palette, hue_shift)` |
+| `Character::update` | `(dt, walkable, seats)` advances movement and frames |
+| `set_active`, `set_idle`, `set_waiting`, `set_permission` | Status transitions |
+| `set_dormant`, `start_dormant_walk`, `wake_from_dormant` | Dormant handling |
+| `start_delivery`, `take_delivery` | Carry produce to the barn or warehouse |
+| `add_companion`, `remove_companion` | Keyed by tool id; `CompanionKind` Chicken, Cat, Dog |
+| `Character::anim_for_tool` | Tool name to `AnimType` |
+| `Warehouse` | `add`, `count`, `total`, `tier` |
 
-## Character FSM
+Animations: `AnimType` Walk, Type, Read, Fish, Farm, Harvest. Produce: `ProduceType` Wheat, Fruit, Fish.
 
-| State | Trigger | Behavior |
-|-------|---------|----------|
-| IDLE | No active tool | Wander randomly (BFS). After 3-6 moves, rest at seat 60-120s. |
-| WALK | Path exists | Lerp between tiles at 3 tiles/sec. 2 walk frames, 200ms each. |
-| TYPE | Tool active, at seat | Typing animation (Write/Edit/Bash) or reading (Read/Grep/Glob). 400ms/frame. |
+## Configuration
 
-Directions: Down, Up, Right. Left = horizontally flipped Right sprite.
+| Constant | Value |
+|----------|-------|
+| `WALK_FRAME_MS` | 150 |
+| `TYPE_FRAME_MS` | 300 |
+| `WALK_SPEED` | 3.0 tiles per second |
+| `REST_DURATION` | 120 to 240 s |
+| `MAX_AGENTS` | 8 |
 
-## Z-Sorting
-
-All entities collected into a `Vec<Drawable>`, sorted by bottom-Y pixel coordinate:
-- Characters: `y + TILE_SIZE`.
-- Furniture: `(row + footprint_rows) * TILE_SIZE`.
-- Rendered back-to-front onto PixelBuffer via alpha-composited blit.
-
-## Sprite Compositing
-
-```rust
-fn blit(buf: &mut PixelBuffer, sprite: &SpriteData, x: i16, y: i16) {
-    for (sy, row) in sprite.pixels.iter().enumerate() {
-        for (sx, &(r, g, b, a)) in row.iter().enumerate() {
-            if a < 2 { continue; } // transparent
-            let px = x + sx as i16;
-            let py = y + sy as i16;
-            if px >= 0 && py >= 0 && (px as u16) < buf.width && (py as u16) < buf.height {
-                buf.set(px as u16, py as u16, (r, g, b, 255));
-            }
-        }
-    }
-}
-```
+- Warehouse file: `~/.harvest-claude/warehouse.json`.
 
 ## Gotchas
 
-- Delta time capped at 100ms to prevent teleporting after terminal unfocus.
-- Tile coordinates: `(col, row)` where col = x, row = y. Pixel coords: `(col * TILE_SIZE, row * TILE_SIZE)`.
-- 8×8 tiles (half of webview's 16×16). Character sprites 8×16 (half of webview's 16×32).
-- Wander uses BFS, not A*. Office grids are small enough that BFS is optimal.
+- Seats derive from furniture: `STUMP_*` and `FISHING_SPOT` are seats. The stump variant sets the facing direction.
+- `Character::update` counts completed wander paths in a saturating counter. Never use unchecked `u8` addition.
+- Bubbles: `BubbleKind::Permission` stays until the tool result arrives. `BubbleKind::Waiting` marks turn end.
+- A tool result in Permission state returns the character to Active and clears the bubble.
+- A background launch adds a companion. The final result for that tool id removes it.
+- `load_warehouse` returns `Result`. A corrupt file is renamed `warehouse.json.corrupt` with a warning.
+- `save_warehouse` writes a temp file and renames it. A crash leaves no partial file.
+- No matrix spawn or despawn effect exists.

@@ -1,63 +1,74 @@
 # Layout Format
 
-> OfficeLayout schema, tile types, persistence, compatibility with webview version.
+> `OfficeLayout` schema, furniture catalog, default farm, and load policy.
+
+## Quick Start
+
+```json
+{
+  "version": 1,
+  "cols": 28,
+  "rows": 16,
+  "layout_revision": 14,
+  "tiles": [1, 1, 2, 5, 0],
+  "furniture": [{"uid": "f1", "type": "CROP_PLOT", "col": 3, "row": 4}]
+}
+```
+
+## Key Files
+
+| File | Responsibility |
+|------|---------------|
+| `src/layout/persistence.rs` | `load_or_default`, `validate_layout`, default layout |
+| `src/layout/furniture.rs` | Catalog, footprints, seats, categories |
+| `src/types.rs` | `TileType`, `OfficeLayout`, `PlacedFurniture` |
 
 ## Schema
 
-```rust
-struct OfficeLayout {
-    version: u8,           // Must be 1
-    cols: u16,             // Grid width in tiles
-    rows: u16,             // Grid height in tiles
-    tiles: Vec<TileType>,  // Flat row-major (len = cols × rows)
-    furniture: Vec<PlacedFurniture>,
-}
+| Field | Type |
+|-------|------|
+| `version` | `u32` |
+| `cols`, `rows` | Grid size. Default 28x16, maximum 64x64 |
+| `tiles` | `Vec<u8>`, `cols*rows` entries, row-major |
+| `furniture` | `Vec<PlacedFurniture>` |
+| `tile_colors` | Optional per-tile colors |
+| `layout_revision` | Optional `u32` |
 
-struct PlacedFurniture {
-    uid: String,
-    furniture_type: String,  // Asset ID
-    col: i16,                // Can be negative (wall items)
-    row: i16,
-}
+`PlacedFurniture`: `uid`, `type`, `col: i16`, `row: i16`, optional `color`.
 
-enum TileType {
-    Void = 0,     // Transparent, non-walkable
-    Floor1 = 1,   // Walkable floor patterns 1-7
-    Floor2 = 2,
-    Floor3 = 3,
-    Floor4 = 4,
-    Floor5 = 5,
-    Floor6 = 6,
-    Floor7 = 7,
-    Wall = 100,   // Non-walkable wall
-}
-```
+`TileType`: Void 0, Grass 1, GrassDark 2, Dirt 3, DirtDark 4, Water 5, Sand 6, Stone 7, Fence 100.
 
-## Persistence
+## Furniture Catalog
 
-- File: `~/.pixel-agents/layout.json`.
-- Same format as webview version. JSON with `version`, `cols`, `rows`, `tiles`, `furniture` fields.
-- On first run: create default layout (20×11, basic office).
-- Atomic write: write to `.tmp`, rename over original.
+All entries have a 1x1 footprint.
 
-## Webview Compatibility
+| Group | Types |
+|-------|-------|
+| Crops | `CROP_PLOT`, `CROP_PLOT_ON` |
+| Seats | `STUMP_FRONT`, `STUMP_BACK`, `STUMP_LEFT`, `STUMP_RIGHT`, `FISHING_SPOT` |
+| Trees | `TREE`, `TREE_FRUIT` |
+| Structures | `CABIN_WALL`, `BARN_WALL`, `HOME`, `BARN`, `CHICKEN_COOP`, `COW_PEN`, `WELL`, `MAILBOX`, `MAILBOX_ON`, `SCARECROW` |
+| Decor | `LANTERN`, `FLOWER`, `BUSH` |
+| Produce piles | `WHEAT_PILE`, `FRUIT_BASKET`, `FISH_PILE` |
+| Fences | `FENCE_H`, `FENCE_V` |
 
-The TUI version uses 8×8 tiles; the webview uses 16×16. Layouts are stored at tile-level (not pixel-level), so the same `layout.json` works for both. The TUI just renders each tile at half the pixel resolution.
+## Configuration
 
-Furniture positions are tile-based, so they transfer directly. Visual fidelity differs but spatial layout is identical.
+- User layout path: `~/.harvest-claude/layout.json`. `--layout <path>` overrides it.
+- `BUNDLED_REVISION` = 14.
 
-## Default Layout
+## Load Policy
 
-```
-20 cols × 11 rows
-Row 0:    Wall × 20
-Row 1-2:  Floor + desks + chairs (workspace area)
-Row 3-9:  Floor + misc furniture
-Row 10:   Floor (walkway)
-```
+| State of the file | Result |
+|-------------------|--------|
+| Missing | Default layout written and used |
+| `layout_revision` below `BUNDLED_REVISION` | Copied to `layout.json.bak-r<rev>`, then replaced by the default |
+| Invalid (parse error, size mismatch, out-of-range furniture) | Default used in memory, file untouched |
+| Missing explicit `--layout` path | Error |
 
 ## Gotchas
 
-- `tiles` is a flat array, row-major. Index = `row * cols + col`.
-- Furniture `col`/`row` can be negative (wall-mounted items above the grid).
-- Grid max: 64×64. Default: 20×11.
+- `validate_layout` rejects furniture outside the grid and `tiles` of the wrong length.
+- Seats derive from `STUMP_*` and `FISHING_SPOT`. A layout without seats leaves agents idle.
+- Furniture categories: `desk` for crops, `seating` for seats, `electronics` for mailboxes, `building` for `HOME` and `BARN`, `decor` for the rest.
+- Add a new furniture type in the catalog and in the sprite table together.
