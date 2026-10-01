@@ -490,7 +490,7 @@ mod tests {
         let last = (layout.rows as usize - 1) * (layout.cols as usize) + (layout.cols as usize - 1);
         assert_eq!(layout.tiles[last], TileType::Fence as u8);
         // Interior tile (1,1) is a floor type (Grass)
-        let idx = 1 * (layout.cols as usize) + 1;
+        let idx = (layout.cols as usize) + 1;
         let tt = TileType::from_u8(layout.tiles[idx]);
         assert!(tt.is_floor());
     }

@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn drawable_z_sort_order() {
-        let mut drawables = vec![
+        let mut drawables = [
             Drawable {
                 sprite: vec![vec![(255, 0, 0, 255)]],
                 x: 0,
