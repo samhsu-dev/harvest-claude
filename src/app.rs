@@ -4,12 +4,12 @@ use std::time::Instant;
 
 use color_eyre::eyre::{Result, WrapErr, bail};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
-use ratatui::layout::{Constraint, Layout, Position};
+use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style};
 
 use crate::action::Action;
 use crate::cli::Args;
-use crate::constants::{JSONL_POLL_MS, MAX_AGENTS, MAX_DELTA_TIME};
+use crate::constants::{JSONL_POLL_MS, LABEL_MAX_WIDTH, MAX_AGENTS, MAX_DELTA_TIME};
 use crate::engine::pathfind;
 use crate::engine::state::OfficeState;
 use crate::engine::warehouse::{self, Warehouse, produce_for_anim};
@@ -23,9 +23,10 @@ use crate::tui::TerminalGuard;
 use crate::types::{AgentEvent, AgentStatus, AnimType, BubbleKind, CompanionKind, ProduceType};
 use crate::ui::input;
 use crate::ui::status_bar::{AgentSummary, SelectedInfo, StatusBar};
+use crate::ui::text;
 use crate::watcher::agent::ApplyOutcome;
 use crate::watcher::focus;
-use crate::watcher::parser::{self, truncate_chars};
+use crate::watcher::parser;
 use crate::watcher::registry::AgentRegistry;
 use crate::watcher::scanner::{DirectoryScanner, ScanEvent, session_info};
 use crate::watcher::timer::{PollInterval, TimerEvent, TimerManager};
@@ -693,39 +694,15 @@ impl App {
                 for ch in self.office.characters.iter().filter(|c| !c.is_dormant) {
                     let agent = self.agents.agents().iter().find(|a| a.id == ch.agent_id);
                     let project_name = agent.map_or("agent", |a| a.identity.directory.as_str());
-                    let label = short_label(project_name);
+                    let label = text::truncate_to_width(project_name, LABEL_MAX_WIDTH);
 
-                    // Character pixel position → terminal cell position
-                    // Each terminal cell = 1px wide, 2px tall (half-block)
-                    let char_px_x = ch.pos.0 as i16;
-                    let char_px_y = ch.pos.1 as i16;
-
-                    // Label positioned above the character, centered
-                    let label_len = label.len() as i16;
-                    let label_x = main_area.x as i16 + char_px_x + 4 - label_len / 2;
-                    let label_y = main_area.y as i16 + (char_px_y - 4) / 2; // -4px above head
-
-                    if label_y < main_area.y as i16
-                        || label_y >= (main_area.y + main_area.height) as i16
-                    {
-                        continue;
-                    }
-
+                    // One terminal cell is 1px wide and 2px tall (half-block); the
+                    // label sits 4px above the head, centered on the 8px-wide sprite.
+                    let center_x = i32::from(main_area.x) + ch.pos.0 as i32 + 4;
+                    let label_y = i32::from(main_area.y) + (ch.pos.1 as i32 - 4) / 2;
                     let (pr, pg, pb) = palette_color(ch.palette);
                     let style = Style::default().fg(Color::Rgb(pr, pg, pb));
-
-                    for (i, ch_byte) in label.bytes().enumerate() {
-                        let x = label_x + i as i16;
-                        if x < main_area.x as i16 || x >= (main_area.x + main_area.width) as i16 {
-                            continue;
-                        }
-                        if let Some(cell) =
-                            term_buf.cell_mut(Position::new(x as u16, label_y as u16))
-                        {
-                            cell.set_symbol(&String::from(ch_byte as char));
-                            cell.set_style(style);
-                        }
-                    }
+                    text::draw_centered(term_buf, main_area, center_x, label_y, &label, style);
                 }
 
                 // Status bar
@@ -794,15 +771,6 @@ fn parse_tile_key(key: &str) -> Option<(u16, u16)> {
     let col: u16 = parts.next()?.parse().ok()?;
     let row: u16 = parts.next()?.parse().ok()?;
     Some((col, row))
-}
-
-/// Shorten a project directory name to at most 8 characters for a character label.
-fn short_label(directory: &str) -> String {
-    if directory.chars().count() > 8 {
-        format!("{}…", truncate_chars(directory, 7))
-    } else {
-        directory.to_owned()
-    }
 }
 
 /// Map a produce furniture type to its warehouse tier for rendering.

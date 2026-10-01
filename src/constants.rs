@@ -31,6 +31,9 @@ pub const JSONL_MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 /// Bytes read from the end of a transcript to rebuild an adopted agent's state.
 pub const REPLAY_TAIL_BYTES: u64 = 65_536;
 
+/// Widest floating name label above a character, in terminal columns.
+pub const LABEL_MAX_WIDTH: usize = 8;
+
 /// Longest text kept for one summary source (tool detail, assistant line, title, prompt).
 pub const SUMMARY_SOURCE_MAX_CHARS: usize = 200;
 
