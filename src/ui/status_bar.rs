@@ -18,7 +18,7 @@ const PANEL_BG: Color = Color::Rgb(30, 30, 30);
 /// Background of the selected agent row.
 const SELECTED_BG: Color = Color::Rgb(60, 60, 60);
 
-const KEY_HINTS: &str = "q quit  ←→ select  esc deselect";
+const KEY_HINTS: &str = "q quit  ←→ select  esc deselect  enter focus";
 
 const TOO_SMALL_HINT: &str = "enlarge terminal to see the full farm";
 

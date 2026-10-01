@@ -464,9 +464,21 @@ impl App {
                 }
                 self.selected = None;
             }
+            KeyCode::Enter => {
+                if let Some(id) = self.selected {
+                    self.focus_agent(id);
+                }
+            }
             KeyCode::Left => self.cycle_selection(false),
             KeyCode::Right => self.cycle_selection(true),
             _ => {}
+        }
+    }
+
+    fn focus_agent(&self, agent_id: usize) {
+        match self.agents.get(agent_id).and_then(|a| a.cwd.clone()) {
+            Some(cwd) => focus::focus_agent_window(cwd),
+            None => tracing::info!(agent_id, "no working directory known yet, cannot focus"),
         }
     }
 
@@ -521,9 +533,7 @@ impl App {
 
         // Clicking an already-selected character: focus its terminal window
         if self.selected == Some(agent_id) {
-            if let Some(agent) = self.agents.get(agent_id) {
-                focus::focus_agent_window(&agent.jsonl_path);
-            }
+            self.focus_agent(agent_id);
             return;
         }
 
