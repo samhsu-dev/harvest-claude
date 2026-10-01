@@ -36,7 +36,7 @@ Flow, one thread per source, one consumer:
 ```
 crossterm thread ──► EventHandler ──► Action ──► App::update ──► App::render
                        tick (16 ms) ──┘            ├─ every JSONL_POLL_MS: readers → Agent::apply → effects
-                                                   └─ every SCAN_INTERVAL_MS: scanner → adopt / dormant / remove
+                                                   └─ every tick: scanner → adopt / dormant / remove
 ```
 
 Visibility: every module is `pub` and re-exported from `lib.rs`; integration tests in `tests/` import them by path.
@@ -120,7 +120,7 @@ All values are compile-time constants (tier 1). Grouped by concern.
 | Grid | `TILE_SIZE=8`, `DEFAULT_COLS=28`, `DEFAULT_ROWS=16`, `MAX_COLS=MAX_ROWS=64`, `MIN_TERMINAL_COLS=40`, `MIN_TERMINAL_ROWS=8` |
 | Animation | `WALK_FRAME_MS`, `TYPE_FRAME_MS`, `WALK_SPEED`, `SITTING_OFFSET_PX`, furniture and bubble durations |
 | Wander | pause, moves, rest ranges |
-| Polling | `JSONL_POLL_MS=500`, `SCAN_INTERVAL_MS=3000`, `JSONL_READ_CAP=64 KiB`, `JSONL_MAX_LINE_BYTES=8 MiB`, `REPLAY_TAIL_BYTES=64 KiB` |
+| Polling | `JSONL_POLL_MS=500`, `JSONL_READ_CAP=64 KiB`, `JSONL_MAX_LINE_BYTES=8 MiB`, `REPLAY_TAIL_BYTES=64 KiB` |
 | Heuristics | `PERMISSION_TIMER_MS=7000`, `TEXT_IDLE_TIMER_MS=5000` |
 | Lifecycle | `EXTERNAL_THRESHOLD_SECS=120`, `DORMANT_THRESHOLD_SECS=600`, `REMOVED_THRESHOLD_SECS=7200`, `GLOBAL_MIN_FILE_SIZE=3072`, `MAX_AGENTS=8` |
 | Text | `SUMMARY_SOURCE_MAX_CHARS=200`, `LABEL_MAX_WIDTH=8`, `NAME_MAX_WIDTH=12` |

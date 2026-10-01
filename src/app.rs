@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use color_eyre::eyre::{Result, WrapErr, bail};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
@@ -8,7 +9,7 @@ use ratatui::style::{Color, Style};
 
 use crate::action::Action;
 use crate::cli::Args;
-use crate::constants::{MAX_AGENTS, MAX_DELTA_TIME};
+use crate::constants::{JSONL_POLL_MS, MAX_AGENTS, MAX_DELTA_TIME};
 use crate::engine::pathfind;
 use crate::engine::state::OfficeState;
 use crate::engine::warehouse::{self, Warehouse, produce_for_anim};
@@ -27,7 +28,7 @@ use crate::watcher::focus;
 use crate::watcher::parser::{self, truncate_chars};
 use crate::watcher::registry::AgentRegistry;
 use crate::watcher::scanner::{DirectoryScanner, ScanEvent, session_info};
-use crate::watcher::timer::{TimerEvent, TimerManager};
+use crate::watcher::timer::{PollInterval, TimerEvent, TimerManager};
 
 /// Application orchestrator. Receives `Action`, updates state, renders.
 pub struct App {
@@ -35,6 +36,7 @@ pub struct App {
     agents: AgentRegistry,
     scanner: DirectoryScanner,
     timers: TimerManager,
+    reader_poll: PollInterval,
     warehouse: Warehouse,
     config_dir: Option<std::path::PathBuf>,
     selected: Option<usize>,
@@ -95,6 +97,7 @@ impl App {
             agents,
             scanner,
             timers: TimerManager::new(),
+            reader_poll: PollInterval::new(JSONL_POLL_MS),
             warehouse: wh,
             config_dir,
             selected: None,
@@ -290,8 +293,14 @@ impl App {
             }
         }
 
-        // Poll JSONL readers
-        for (agent_id, events) in self.agents.poll_all() {
+        // Poll JSONL readers at their own cadence, after the scanner so a wake is seen first.
+        let readers_due = self.reader_poll.due(Instant::now());
+        let polled = if readers_due {
+            self.agents.poll_all()
+        } else {
+            Vec::new()
+        };
+        for (agent_id, events) in polled {
             self.timers.cancel_text_idle(agent_id);
             for (event, outcome) in events {
                 self.handle_agent_event(agent_id, event, outcome);
@@ -835,6 +844,8 @@ mod tests {
                 agents: AgentRegistry::new(),
                 scanner: DirectoryScanner::new(vec![dir]).unwrap(),
                 timers: TimerManager::new(),
+                // Due on every tick so tests do not wait for the production cadence.
+                reader_poll: PollInterval::new(0),
                 warehouse: Warehouse::default(),
                 config_dir: None,
                 selected: None,

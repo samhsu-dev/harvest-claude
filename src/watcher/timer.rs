@@ -12,6 +12,34 @@ pub enum TimerEvent {
     TextIdleTimeout { agent_id: usize },
 }
 
+/// Fires once per period when polled each frame, so work runs at its own cadence.
+#[derive(Debug, Clone)]
+pub struct PollInterval {
+    period: Duration,
+    last: Instant,
+}
+
+impl PollInterval {
+    /// Create an interval of `period_ms` milliseconds, starting at the current instant.
+    pub fn new(period_ms: u64) -> Self {
+        Self {
+            period: Duration::from_millis(period_ms),
+            last: Instant::now(),
+        }
+    }
+
+    /// Whether a full period has passed since the last time this returned true.
+    ///
+    /// Returning true restarts the period at `now`.
+    pub fn due(&mut self, now: Instant) -> bool {
+        if now.saturating_duration_since(self.last) < self.period {
+            return false;
+        }
+        self.last = now;
+        true
+    }
+}
+
 /// Per-agent heuristic timers checked each frame via `Instant` comparison.
 #[derive(Debug, Clone)]
 pub struct TimerManager {
@@ -105,7 +133,29 @@ impl Default for TimerManager {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
+
+    #[rstest]
+    #[case(0, false)] // same instant
+    #[case(499, false)] // just below the period
+    #[case(500, true)] // exactly the period
+    #[case(2_000, true)] // well past the period
+    fn poll_interval_is_due_once_a_period_has_passed(#[case] elapsed_ms: u64, #[case] due: bool) {
+        let mut interval = PollInterval::new(500);
+        let start = interval.last;
+        assert_eq!(interval.due(start + Duration::from_millis(elapsed_ms)), due);
+    }
+
+    #[test]
+    fn poll_interval_restarts_after_firing() {
+        let mut interval = PollInterval::new(500);
+        let start = interval.last;
+        assert!(interval.due(start + Duration::from_millis(600)));
+        assert!(!interval.due(start + Duration::from_millis(900)));
+        assert!(interval.due(start + Duration::from_millis(1_100)));
+    }
 
     #[test]
     fn permission_timer_expires() {

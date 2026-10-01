@@ -156,7 +156,7 @@ No async runtime needed. File reading is synchronous (seek + read_line). Renderi
 
 ### JSONL Polling vs fs.watch
 
-VS Code extension uses 500ms polling as primary strategy (fs.watch is unreliable cross-platform). TUI reads every tracked transcript every `JSONL_POLL_MS` (500 ms) and uses `notify` only for discovery of new files, with directory re-scan every `SCAN_INTERVAL_MS` (3 s). This gives near-instant detection on most platforms with reliable fallback.
+VS Code extension uses 500ms polling as primary strategy (fs.watch is unreliable cross-platform). TUI reads every tracked transcript every `JSONL_POLL_MS` (500 ms) and uses `notify` only for discovery of new files. The scanner drains the `notify` channel every frame, which costs only a channel read. This gives near-instant detection on most platforms with reliable fallback.
 
 ### Half-Block Rendering vs Canvas
 
