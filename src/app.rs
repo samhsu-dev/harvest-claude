@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use color_eyre::eyre::{Result, WrapErr, bail};
@@ -67,6 +67,17 @@ fn load_persistent_warehouse(
     }
 }
 
+/// Directories to scan: the default projects directory, then each explicit one once.
+fn resolve_watch_dirs(explicit: &[PathBuf], home: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![home.join(".claude").join("projects")];
+    for dir in explicit {
+        if !dirs.contains(dir) {
+            dirs.push(dir.clone());
+        }
+    }
+    dirs
+}
+
 impl App {
     /// Create a new App from CLI arguments.
     ///
@@ -83,12 +94,8 @@ impl App {
             .wrap_err("failed to load layout")?;
         let office = OfficeState::from_layout(layout);
 
-        let watch_dirs = if args.watch_dir.is_empty() {
-            let home = dirs::home_dir().unwrap_or_default();
-            vec![home.join(".claude").join("projects")]
-        } else {
-            args.watch_dir.clone()
-        };
+        let home = dirs::home_dir().unwrap_or_default();
+        let watch_dirs = resolve_watch_dirs(&args.watch_dir, &home);
 
         let scanner =
             DirectoryScanner::new(watch_dirs).wrap_err("failed to create directory scanner")?;
@@ -834,8 +841,9 @@ fn palette_color(palette: u8) -> (u8, u8, u8) {
 mod tests {
     use super::*;
     use std::io::Write;
-    use std::path::PathBuf;
     use std::time::{Duration, Instant};
+
+    use rstest::rstest;
 
     use crate::layout::persistence::default_layout;
 
@@ -1047,6 +1055,20 @@ mod tests {
             KeyModifiers::NONE,
         )));
         assert!(app.running);
+    }
+
+    #[rstest]
+    #[case(&[], &["/h/.claude/projects"])] // default only
+    #[case(&["/x"], &["/h/.claude/projects", "/x"])] // explicit is additional
+    #[case(&["/h/.claude/projects"], &["/h/.claude/projects"])] // duplicate of default
+    #[case(&["/x", "/x"], &["/h/.claude/projects", "/x"])] // duplicate explicit
+    fn watch_dirs_are_the_default_plus_explicit_directories(
+        #[case] explicit: &[&str],
+        #[case] want: &[&str],
+    ) {
+        let explicit: Vec<PathBuf> = explicit.iter().map(PathBuf::from).collect();
+        let got = resolve_watch_dirs(&explicit, Path::new("/h"));
+        assert_eq!(got, want.iter().map(PathBuf::from).collect::<Vec<_>>());
     }
 
     #[test]
