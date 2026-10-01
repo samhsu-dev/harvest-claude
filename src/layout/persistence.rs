@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{Result, WrapErr};
+use color_eyre::eyre::{Result, WrapErr, bail};
 
-use crate::constants::{DEFAULT_COLS, DEFAULT_ROWS};
+use crate::constants::{DEFAULT_COLS, DEFAULT_ROWS, MAX_COLS, MAX_ROWS};
 use crate::types::{OfficeLayout, PlacedFurniture, TileColor, TileType};
 
 /// Current bundled layout revision. Layouts with a lower revision are replaced.
@@ -24,18 +24,52 @@ const LEGACY_VOID_VALUE: u8 = 8;
 // Public API
 // -----------------------------------------------------------------------
 
-/// Read, deserialize, and migrate a layout from disk.
+/// Read, deserialize, validate, and migrate a layout from disk.
 ///
 /// # Errors
-/// Returns an error if the file cannot be read or the JSON is malformed.
+/// Returns an error if the file cannot be read, the JSON is malformed, or the layout fails
+/// [`validate_layout`].
 pub fn load_layout(path: &Path) -> Result<OfficeLayout> {
     let contents = fs::read_to_string(path)
         .wrap_err_with(|| format!("failed to read layout from {}", path.display()))?;
     let mut layout: OfficeLayout = serde_json::from_str(&contents)
         .wrap_err_with(|| format!("failed to parse layout JSON from {}", path.display()))?;
 
+    validate_layout(&layout).wrap_err_with(|| format!("invalid layout in {}", path.display()))?;
     migrate(&mut layout);
     Ok(layout)
+}
+
+/// Check that a layout's grid and furniture anchors are consistent.
+///
+/// # Errors
+/// Returns an error when the tile count differs from `cols * rows`, a dimension is zero or above
+/// `MAX_COLS` / `MAX_ROWS`, or a furniture anchor lies outside the grid.
+pub fn validate_layout(layout: &OfficeLayout) -> Result<()> {
+    let (cols, rows) = (layout.cols, layout.rows);
+    if cols == 0 || rows == 0 || cols > MAX_COLS || rows > MAX_ROWS {
+        bail!("grid {cols}x{rows} is outside 1..={MAX_COLS} x 1..={MAX_ROWS}");
+    }
+    let expected = usize::from(cols) * usize::from(rows);
+    if layout.tiles.len() != expected {
+        bail!(
+            "{} tiles for a {cols}x{rows} grid, expected {expected}",
+            layout.tiles.len()
+        );
+    }
+    for item in &layout.furniture {
+        let inside = (0..i32::from(cols)).contains(&i32::from(item.col))
+            && (0..i32::from(rows)).contains(&i32::from(item.row));
+        if !inside {
+            bail!(
+                "furniture {} at ({}, {}) is outside the grid",
+                item.uid,
+                item.col,
+                item.row
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Atomically write a layout to disk (write temp file, then rename).
@@ -69,28 +103,65 @@ pub fn config_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Load the layout from `~/.harvest-claude/layout.json`, falling back to the
-/// bundled default if the file is missing or unreadable.
+/// Load the layout from `path_override`, or from `~/.harvest-claude/layout.json` when `None`.
+///
+/// A user file is never overwritten without a backup. A missing default file is created from the
+/// bundled layout. A file that is unreadable, malformed, or invalid yields the bundled layout in
+/// memory and stays on disk untouched. A file with an older revision is copied to
+/// `<file>.bak-r<revision>` and then replaced by the bundled layout.
 ///
 /// # Errors
-/// Returns an error only if `config_dir()` fails.
-pub fn load_or_default() -> Result<OfficeLayout> {
-    let dir = config_dir()?;
-    let path = dir.join(LAYOUT_FILENAME);
-    if path.exists() {
-        match load_layout(&path) {
-            Ok(layout) => return Ok(layout),
-            Err(e) => {
-                tracing::warn!("failed to load layout, using default: {e}");
-            }
+/// Returns an error when `config_dir()` fails or an explicit `path_override` does not exist.
+pub fn load_or_default(path_override: Option<&Path>) -> Result<OfficeLayout> {
+    let path = match path_override {
+        Some(path) if !path.exists() => bail!("layout file {} does not exist", path.display()),
+        Some(path) => path.to_owned(),
+        None => config_dir()?.join(LAYOUT_FILENAME),
+    };
+    if !path.exists() {
+        let layout = default_layout();
+        if let Err(e) = save_layout(&path, &layout) {
+            tracing::warn!("failed to save default layout: {e:#}");
+        }
+        return Ok(layout);
+    }
+    match load_layout(&path) {
+        Ok(layout) if is_outdated(&layout) => Ok(replace_outdated(&path, &layout)),
+        Ok(layout) => Ok(layout),
+        Err(e) => {
+            tracing::warn!("ignoring layout file, using the bundled default: {e:#}");
+            Ok(default_layout())
         }
     }
+}
+
+/// Whether a layout predates the bundled revision.
+fn is_outdated(layout: &OfficeLayout) -> bool {
+    layout.layout_revision.unwrap_or(0) < BUNDLED_REVISION
+}
+
+/// Back up an outdated layout file and replace it with the bundled layout. When the backup fails
+/// the file stays as it is and the bundled layout is used in memory only.
+fn replace_outdated(path: &Path, old: &OfficeLayout) -> OfficeLayout {
+    let revision = old.layout_revision.unwrap_or(0);
+    let mut backup_name = path.file_name().unwrap_or_default().to_owned();
+    backup_name.push(format!(".bak-r{revision}"));
+    let backup = path.with_file_name(backup_name);
     let layout = default_layout();
-    // Write default to disk so users can customize via the JSON file.
-    if let Err(e) = save_layout(&path, &layout) {
-        tracing::warn!("failed to save default layout: {e}");
+    if let Err(e) = fs::copy(path, &backup) {
+        tracing::warn!(path = %path.display(), "outdated layout not replaced, backup failed: {e}");
+        return layout;
     }
-    Ok(layout)
+    tracing::warn!(
+        path = %path.display(),
+        backup = %backup.display(),
+        revision,
+        "outdated layout replaced by the bundled default"
+    );
+    if let Err(e) = save_layout(path, &layout) {
+        tracing::warn!("failed to save bundled layout: {e:#}");
+    }
+    layout
 }
 
 /// Bundled default farm layout: 28x16 grid — classic Harvest Moon arrangement
@@ -340,7 +411,6 @@ fn migrate(layout: &mut OfficeLayout) {
     migrate_void_tiles(layout);
     migrate_furniture_types(layout);
     migrate_tile_colors(layout);
-    migrate_layout_revision(layout);
 }
 
 /// Migration 1: old VOID value 8 → new value 0.
@@ -397,14 +467,6 @@ fn migrate_tile_colors(layout: &mut OfficeLayout) {
     layout.tile_colors = Some(colors);
 }
 
-/// Migration 4: replace layout if bundled revision is newer.
-fn migrate_layout_revision(layout: &mut OfficeLayout) {
-    let file_rev = layout.layout_revision.unwrap_or(0);
-    if file_rev < BUNDLED_REVISION {
-        *layout = default_layout();
-    }
-}
-
 /// Default HSL color for a given floor tile type.
 fn default_tile_color(tt: TileType) -> TileColor {
     match tt {
@@ -455,9 +517,14 @@ fn default_tile_color(tt: TileType) -> TileColor {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::Path;
 
-    use super::{BUNDLED_REVISION, default_layout, load_layout, migrate, save_layout};
+    use super::{
+        BUNDLED_REVISION, default_layout, load_layout, load_or_default, migrate, save_layout,
+        validate_layout,
+    };
+    use crate::constants::MAX_COLS;
     use crate::types::{OfficeLayout, PlacedFurniture, TileType};
 
     #[test]
@@ -519,11 +586,7 @@ mod tests {
             layout_revision: None,
         };
         migrate(&mut layout);
-        // After migration, revision is bumped to default, so tiles come from default_layout
-        // But if we test just migrate_void_tiles directly:
-        // The void migration runs, then revision migration replaces with default.
-        // Test the revision migration path:
-        assert_eq!(layout.layout_revision, Some(BUNDLED_REVISION));
+        assert_eq!(layout.tiles, vec![TileType::Void as u8, 1]);
     }
 
     #[test]
@@ -551,5 +614,102 @@ mod tests {
     fn load_nonexistent_file_returns_error() {
         let result = load_layout(Path::new("/nonexistent/path/layout.json"));
         assert!(result.is_err());
+    }
+
+    fn write_layout(path: &Path, layout: &OfficeLayout) -> String {
+        let json = serde_json::to_string_pretty(layout).unwrap();
+        fs::write(path, &json).unwrap();
+        json
+    }
+
+    #[test]
+    fn invalid_layout_file_is_left_untouched_and_default_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        fs::write(&path, "{ not json").unwrap();
+
+        let layout = load_or_default(Some(&path)).unwrap();
+
+        assert_eq!(layout.layout_revision, Some(BUNDLED_REVISION));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
+    }
+
+    #[test]
+    fn layout_failing_validation_is_left_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        let mut broken = default_layout();
+        broken.tiles.pop();
+        let written = write_layout(&path, &broken);
+
+        let layout = load_or_default(Some(&path)).unwrap();
+
+        assert_eq!(
+            layout.tiles.len(),
+            usize::from(layout.cols) * usize::from(layout.rows)
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), written);
+    }
+
+    #[test]
+    fn outdated_layout_is_backed_up_before_it_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        let mut old = default_layout();
+        old.layout_revision = Some(BUNDLED_REVISION - 1);
+        old.furniture.clear();
+        let written = write_layout(&path, &old);
+
+        let layout = load_or_default(Some(&path)).unwrap();
+
+        let backup = dir
+            .path()
+            .join(format!("layout.json.bak-r{}", BUNDLED_REVISION - 1));
+        assert_eq!(fs::read_to_string(backup).unwrap(), written);
+        assert_eq!(layout.layout_revision, Some(BUNDLED_REVISION));
+        assert_eq!(
+            load_layout(&path).unwrap().layout_revision,
+            Some(BUNDLED_REVISION)
+        );
+    }
+
+    #[test]
+    fn current_layout_is_used_as_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        let mut custom = default_layout();
+        custom.furniture.truncate(1);
+        let written = write_layout(&path, &custom);
+
+        let layout = load_or_default(Some(&path)).unwrap();
+
+        assert_eq!(layout.furniture.len(), 1);
+        assert_eq!(fs::read_to_string(&path).unwrap(), written);
+    }
+
+    #[test]
+    fn missing_explicit_layout_path_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = load_or_default(Some(&dir.path().join("absent.json"))).unwrap_err();
+        assert!(format!("{err:#}").contains("absent.json"));
+    }
+
+    #[test]
+    fn validate_layout_rejects_inconsistent_layouts() {
+        let mut short = default_layout();
+        short.tiles.pop();
+        let mut empty = default_layout();
+        empty.cols = 0;
+        let mut huge = default_layout();
+        huge.cols = MAX_COLS + 1;
+        let mut outside = default_layout();
+        outside.furniture[0].col = i16::try_from(outside.cols).unwrap();
+        let mut negative = default_layout();
+        negative.furniture[0].row = -1;
+
+        for layout in [short, empty, huge, outside, negative] {
+            assert!(validate_layout(&layout).is_err());
+        }
+        assert!(validate_layout(&default_layout()).is_ok());
     }
 }

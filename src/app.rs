@@ -61,12 +61,8 @@ fn load_persistent_warehouse(
 impl App {
     /// Create a new App from CLI arguments.
     pub fn new(args: Args) -> Result<Self> {
-        let layout = if let Some(path) = &args.layout {
-            persistence::load_layout(path).wrap_err("failed to load layout")?
-        } else {
-            persistence::load_or_default().wrap_err("failed to load default layout")?
-        };
-
+        let layout = persistence::load_or_default(args.layout.as_deref())
+            .wrap_err("failed to load layout")?;
         let office = OfficeState::from_layout(layout);
 
         let watch_dirs = if args.watch_dir.is_empty() {
