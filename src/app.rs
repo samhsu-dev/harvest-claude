@@ -4,12 +4,16 @@ use std::time::Instant;
 
 use color_eyre::eyre::{Result, WrapErr, bail};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 
 use crate::action::Action;
 use crate::cli::Args;
-use crate::constants::{JSONL_POLL_MS, LABEL_MAX_WIDTH, MAX_AGENTS, MAX_DELTA_TIME};
+use crate::constants::{
+    JSONL_POLL_MS, LABEL_MAX_WIDTH, MAX_AGENTS, MAX_DELTA_TIME, MIN_TERMINAL_COLS,
+    MIN_TERMINAL_ROWS, TILE_SIZE,
+};
 use crate::engine::pathfind;
 use crate::engine::state::OfficeState;
 use crate::engine::warehouse::{self, Warehouse, produce_for_anim};
@@ -22,7 +26,7 @@ use crate::render::composer::{
 use crate::tui::TerminalGuard;
 use crate::types::{AgentEvent, AgentStatus, AnimType, BubbleKind, CompanionKind, ProduceType};
 use crate::ui::input;
-use crate::ui::status_bar::{AgentSummary, SelectedInfo, StatusBar};
+use crate::ui::status_bar::{AgentPanel, AgentRow, ProduceCounts};
 use crate::ui::text;
 use crate::watcher::agent::ApplyOutcome;
 use crate::watcher::focus;
@@ -587,16 +591,45 @@ impl App {
     }
 
     /// Compose scene + status bar.
+    // One row per agent that is not resting, in agent id order.
+    fn agent_rows(&self) -> Vec<AgentRow> {
+        self.agents
+            .agents()
+            .iter()
+            .filter(|a| a.status != AgentStatus::Dormant)
+            .map(|a| AgentRow {
+                color: palette_color(a.palette),
+                identity: a.display_name(),
+                status: a.status,
+                summary: a.summary(),
+                selected: self.selected == Some(a.id),
+            })
+            .collect()
+    }
+
+    // Whether the farm needs more terminal cells than the scene area has.
+    fn scene_is_cropped(&self, scene: Rect) -> bool {
+        let (cols, rows) = (self.office.layout.cols, self.office.layout.rows);
+        scene.width < cols * TILE_SIZE || scene.height * 2 < rows * TILE_SIZE
+    }
+
     fn render(&mut self, terminal: &mut TerminalGuard) -> Result<()> {
         terminal
             .terminal
             .draw(|frame| {
                 let area = frame.area();
+                if area.width < MIN_TERMINAL_COLS || area.height <= MIN_TERMINAL_ROWS {
+                    draw_size_notice(frame.buffer_mut(), area);
+                    return;
+                }
+                let rows = self.agent_rows();
+                let panel_height = AgentPanel::height_for(rows.len(), area.height);
                 let chunks =
-                    Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
+                    Layout::vertical([Constraint::Min(1), Constraint::Length(panel_height)])
+                        .split(area);
                 let main_area = chunks[0];
                 self.render_origin = (main_area.x, main_area.y);
-                let status_area = chunks[1];
+                let panel_area = chunks[1];
 
                 let buf_w = main_area.width;
                 let buf_h = main_area.height * 2;
@@ -705,49 +738,16 @@ impl App {
                     text::draw_centered(term_buf, main_area, center_x, label_y, &label, style);
                 }
 
-                // Status bar
-                let agent_summaries: Vec<AgentSummary> = self
-                    .office
-                    .characters
-                    .iter()
-                    .filter(|ch| !ch.is_dormant)
-                    .map(|ch| {
-                        let agent = self.agents.agents().iter().find(|a| a.id == ch.agent_id);
-                        AgentSummary {
-                            color: palette_color(ch.palette),
-                            project_name: agent
-                                .map(|a| a.identity.directory.clone())
-                                .unwrap_or_default(),
-                            status: agent.map(|a| a.status).unwrap_or(AgentStatus::Idle),
-                            tool_name: ch.tool_name.clone(),
-                        }
-                    })
-                    .collect();
-
-                let selected_info = self.selected.and_then(|id| {
-                    let agent = self.agents.agents().iter().find(|a| a.id == id)?;
-                    let ch = self.office.character_by_agent(id)?;
-                    Some(SelectedInfo {
-                        project_name: agent.identity.directory.clone(),
-                        session_id: agent.session_id.clone(),
-                        status: agent.status,
-                        tool_name: ch.tool_name.clone(),
-                    })
-                });
-
-                let produce = crate::ui::status_bar::ProduceCounts {
-                    wheat: self.warehouse.count(ProduceType::Wheat),
-                    fruit: self.warehouse.count(ProduceType::Fruit),
-                    fish: self.warehouse.count(ProduceType::Fish),
+                let panel = AgentPanel {
+                    rows,
+                    produce: ProduceCounts {
+                        wheat: self.warehouse.count(ProduceType::Wheat),
+                        fruit: self.warehouse.count(ProduceType::Fruit),
+                        fish: self.warehouse.count(ProduceType::Fish),
+                    },
+                    too_small: self.scene_is_cropped(main_area),
                 };
-
-                let status = StatusBar {
-                    agents: agent_summaries,
-                    selected_info,
-                    produce,
-                };
-
-                frame.render_widget(&status, status_area);
+                frame.render_widget(&panel, panel_area);
             })
             .wrap_err("render failed")?;
         Ok(())
@@ -755,6 +755,17 @@ impl App {
 }
 
 /// Pick a companion animal kind based on agent/tool IDs for variety.
+/// Draw the one-line notice shown when the terminal cannot hold the farm view.
+fn draw_size_notice(buf: &mut Buffer, area: Rect) {
+    let notice = format!(
+        "terminal too small: need {MIN_TERMINAL_COLS}x{}",
+        MIN_TERMINAL_ROWS + 1
+    );
+    let center = i32::from(area.x) + i32::from(area.width) / 2;
+    let row = i32::from(area.y) + i32::from(area.height) / 2;
+    text::draw_centered(buf, area, center, row, &notice, Style::default());
+}
+
 fn pick_companion_kind(agent_id: usize, tool_id: &str) -> CompanionKind {
     let hash = tool_id
         .bytes()

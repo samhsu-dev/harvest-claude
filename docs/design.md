@@ -152,4 +152,4 @@ No custom error enum: the crate is an application, failures end in a message or 
 | Warehouse save fails | `warn` log; retry on next deposit |
 | Transcript read error on one Agent | `warn` log once per Agent; other Agents continue |
 | Malformed or oversized JSONL line | skipped; `debug` log |
-| Terminal below `MIN_TERMINAL_*` | plain notice, no scene |
+| Terminal narrower than `MIN_TERMINAL_COLS` or not taller than `MIN_TERMINAL_ROWS` | plain notice, no scene |

@@ -39,6 +39,14 @@ pub fn truncate_to_width(text: &str, max_width: usize) -> String {
     cut
 }
 
+/// `text` cut or padded with spaces to exactly `width` terminal columns.
+pub fn fit_to_width(text: &str, width: usize) -> String {
+    let mut fitted = truncate_to_width(text, width);
+    let missing = width.saturating_sub(fitted.width());
+    fitted.extend(std::iter::repeat_n(' ', missing));
+    fitted
+}
+
 /// Draw `text` on row `y`, centered on column `center_x` and kept inside `area`.
 ///
 /// Text wider than `area` is cut to its width. Rows outside `area` draw nothing.
@@ -88,6 +96,17 @@ mod tests {
         let got = truncate_to_width(text, max);
         assert_eq!(got, want);
         assert!(got.width() <= max, "{got:?} wider than {max}");
+    }
+
+    #[rstest]
+    #[case("ab", 4, "ab  ")] // padded
+    #[case("abcdef", 4, "abc…")] // cut
+    #[case("你好", 5, "你好 ")] // wide characters pad by columns
+    #[case("abcd", 4, "abcd")] // exact
+    fn fits_to_exact_display_width(#[case] text: &str, #[case] width: usize, #[case] want: &str) {
+        let got = fit_to_width(text, width);
+        assert_eq!(got, want);
+        assert_eq!(got.width(), width);
     }
 
     fn row(buf: &Buffer, y: u16) -> String {

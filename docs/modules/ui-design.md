@@ -68,4 +68,4 @@ Keys are mapped in `App::update`, not here.
 
 ## Error Handling
 
-Rendering never fails on content: oversized text is truncated, an area narrower than a row is clipped. Below `MIN_TERMINAL_COLS` × `MIN_TERMINAL_ROWS` the App draws one centred notice instead of the panel and scene.
+Rendering never fails on content: oversized text is truncated, an area narrower than a row is clipped. The App draws one centred notice instead of the panel and scene when the terminal is narrower than `MIN_TERMINAL_COLS` or not taller than `MIN_TERMINAL_ROWS` (the scene rows, the panel needs one more).

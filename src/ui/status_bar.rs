@@ -1,244 +1,276 @@
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
+use unicode_width::UnicodeWidthStr;
 
+use crate::constants::{MIN_TERMINAL_ROWS, NAME_MAX_WIDTH};
 use crate::types::AgentStatus;
+use crate::ui::text::{fit_to_width, truncate_to_width};
 
-/// Per-agent summary shown in the status bar.
+/// Columns reserved for the status word, wide enough for `Permission`.
+const STATUS_WIDTH: usize = 10;
+
+/// Background of the panel.
+const PANEL_BG: Color = Color::Rgb(30, 30, 30);
+
+/// Background of the selected agent row.
+const SELECTED_BG: Color = Color::Rgb(60, 60, 60);
+
+const KEY_HINTS: &str = "q quit  ←→ select  esc deselect";
+
+const TOO_SMALL_HINT: &str = "enlarge terminal to see the full farm";
+
+/// One agent line of the panel.
 #[derive(Debug, Clone)]
-pub struct AgentSummary {
+pub struct AgentRow {
     /// RGB palette dot color.
     pub color: (u8, u8, u8),
-    /// Short project name.
-    pub project_name: String,
+    /// Project label, `Agent::display_name`.
+    pub identity: String,
     /// Current agent status.
     pub status: AgentStatus,
-    /// Currently active tool name, if any.
-    pub tool_name: Option<String>,
+    /// One-line description of the current work, `Agent::summary`.
+    pub summary: String,
+    /// Whether the agent is the selected one.
+    pub selected: bool,
 }
 
-/// Information about the currently selected agent.
-#[derive(Debug, Clone)]
-pub struct SelectedInfo {
-    /// Project directory name.
-    pub project_name: String,
-    /// Session identifier.
-    pub session_id: String,
-    /// Current agent status.
-    pub status: AgentStatus,
-    /// Name of the active tool, if any.
-    pub tool_name: Option<String>,
-}
-
-/// Warehouse produce counts for status bar display.
-#[derive(Debug, Clone, Default)]
+/// Warehouse produce counts.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ProduceCounts {
     pub wheat: u32,
     pub fruit: u32,
     pub fish: u32,
 }
 
-/// Bottom status bar showing per-agent summaries, selection details, and keybindings.
+/// Panel below the scene: one row per agent, then produce counts and key hints.
 #[derive(Debug, Clone)]
-pub struct StatusBar {
-    /// Per-agent summaries.
-    pub agents: Vec<AgentSummary>,
-    /// Info for the selected agent, if any.
-    pub selected_info: Option<SelectedInfo>,
+pub struct AgentPanel {
+    /// Agent rows in display order.
+    pub rows: Vec<AgentRow>,
     /// Warehouse produce counts.
     pub produce: ProduceCounts,
+    /// Whether the terminal is smaller than the farm, so the scene is cropped.
+    pub too_small: bool,
 }
 
-impl StatusBar {
-    fn left_spans(&self) -> Vec<Span<'_>> {
-        let mut spans = vec![Span::styled(
-            format!(" {} ", self.agents.len()),
-            Style::default().fg(Color::DarkGray),
-        )];
-
-        for (i, agent) in self.agents.iter().enumerate() {
-            if i > 0 {
-                spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
-            }
-
-            let (r, g, b) = agent.color;
-            spans.push(Span::styled("●", Style::default().fg(Color::Rgb(r, g, b))));
-
-            // Truncate project name to 12 chars
-            let name = truncate_name(&agent.project_name, 12);
-            spans.push(Span::styled(
-                format!("{name} "),
-                Style::default().fg(Color::Cyan),
-            ));
-
-            spans.push(status_span(agent.status));
-
-            if let Some(tool) = &agent.tool_name {
-                spans.push(Span::styled(
-                    format!(":{tool}"),
-                    Style::default().fg(Color::White),
-                ));
-            }
-        }
-
-        if !self.agents.is_empty() {
-            spans.push(Span::raw(" "));
-        }
-
-        spans
+impl AgentPanel {
+    /// Panel height for `row_count` agents in a terminal `total_height` rows tall.
+    ///
+    /// Leaves at least `MIN_TERMINAL_ROWS` rows for the scene and never drops
+    /// the last row.
+    pub fn height_for(row_count: usize, total_height: u16) -> u16 {
+        let wanted = u16::try_from(row_count + 1).unwrap_or(u16::MAX);
+        wanted
+            .min(total_height.saturating_sub(MIN_TERMINAL_ROWS))
+            .max(1)
     }
 
-    fn right_spans(&self) -> Vec<Span<'static>> {
-        let total = self.produce.wheat + self.produce.fruit + self.produce.fish;
-        let mut spans = Vec::new();
+    fn agent_line(row: &AgentRow, width: usize) -> Line<'static> {
+        let (r, g, b) = row.color;
+        let background = if row.selected { SELECTED_BG } else { PANEL_BG };
+        let base = Style::default().fg(Color::White).bg(background);
+        let (status_text, status_color) = status_label(row.status);
+        let prefix = format!(" {} │ ", fit_to_width(&row.identity, NAME_MAX_WIDTH));
+        let used = 1 + prefix.width() + STATUS_WIDTH + 1;
+        let summary = fit_to_width(&row.summary, width.saturating_sub(used));
+        Line::from(vec![
+            Span::styled("●", base.fg(Color::Rgb(r, g, b))),
+            Span::styled(prefix, base.fg(Color::Cyan)),
+            Span::styled(
+                fit_to_width(status_text, STATUS_WIDTH),
+                base.fg(status_color),
+            ),
+            Span::styled(format!(" {summary}"), base),
+        ])
+        .style(if row.selected {
+            base.add_modifier(Modifier::BOLD)
+        } else {
+            base
+        })
+    }
 
-        if total > 0 {
-            spans.push(Span::styled(
-                format!(
-                    "W:{} F:{} f:{} ",
-                    self.produce.wheat, self.produce.fruit, self.produce.fish
-                ),
-                Style::default().fg(Color::Yellow),
-            ));
-        }
-
-        spans.push(Span::styled(
-            "q:quit  ←→:select  esc:deselect ",
-            Style::default().fg(Color::DarkGray),
-        ));
-        spans
+    fn footer_line(&self, width: usize) -> Line<'static> {
+        let produce = format!(
+            " W:{} F:{} f:{} ",
+            self.produce.wheat, self.produce.fruit, self.produce.fish
+        );
+        let hint = if self.too_small {
+            format!("{TOO_SMALL_HINT}  {KEY_HINTS} ")
+        } else {
+            format!("{KEY_HINTS} ")
+        };
+        let room = width.saturating_sub(produce.width());
+        let hint = truncate_to_width(&hint, room);
+        let gap = " ".repeat(room.saturating_sub(hint.width()));
+        let base = Style::default().bg(PANEL_BG);
+        Line::from(vec![
+            Span::styled(produce, base.fg(Color::Yellow)),
+            Span::styled(gap, base),
+            Span::styled(hint, base.fg(Color::DarkGray)),
+        ])
     }
 }
 
-impl Widget for &StatusBar {
-    fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
+impl Widget for &AgentPanel {
+    fn render(self, area: Rect, buf: &mut Buffer) {
         if area.height == 0 || area.width == 0 {
             return;
         }
-
-        // Fill background
-        for x in area.left()..area.right() {
-            buf[(x, area.top())]
-                .set_style(Style::default().bg(Color::Rgb(30, 30, 30)).fg(Color::White));
-            buf[(x, area.top())].set_char(' ');
+        let width = usize::from(area.width);
+        buf.set_style(area, Style::default().bg(PANEL_BG));
+        let shown = usize::from(area.height) - 1;
+        for (offset, row) in self.rows.iter().take(shown).enumerate() {
+            let y = area.y + offset as u16;
+            AgentPanel::agent_line(row, width).render(Rect::new(area.x, y, area.width, 1), buf);
         }
-
-        let left = self.left_spans();
-        let right = self.right_spans();
-
-        let left_width: usize = left.iter().map(|s| s.width()).sum();
-        let right_width: usize = right.iter().map(|s| s.width()).sum();
-        let total_width = area.width as usize;
-
-        // Render left-aligned spans
-        let left_line = Line::from(left);
-        let left_area = Rect::new(area.x, area.y, total_width.min(left_width) as u16, 1);
-        left_line.render(left_area, buf);
-
-        // Render right-aligned spans
-        if total_width >= right_width {
-            let right_start = total_width - right_width;
-            let right_line = Line::from(right);
-            let right_area = Rect::new(area.x + right_start as u16, area.y, right_width as u16, 1);
-            right_line.render(right_area, buf);
-        }
+        let footer = Rect::new(area.x, area.bottom() - 1, area.width, 1);
+        self.footer_line(width).render(footer, buf);
     }
 }
 
-/// Truncate a string to `max` characters, appending "…" if truncated.
-fn truncate_name(name: &str, max: usize) -> String {
-    if name.len() <= max {
-        name.to_owned()
-    } else {
-        format!("{}…", &name[..max - 1])
-    }
-}
-
-/// Map agent status to a colored span.
-fn status_span(status: AgentStatus) -> Span<'static> {
+fn status_label(status: AgentStatus) -> (&'static str, Color) {
     match status {
-        AgentStatus::Active => Span::styled("Active", Style::default().fg(Color::Green)),
-        AgentStatus::Idle => Span::styled("Idle", Style::default().fg(Color::Gray)),
-        AgentStatus::Waiting => Span::styled("Waiting", Style::default().fg(Color::Yellow)),
-        AgentStatus::Permission => Span::styled("Permission", Style::default().fg(Color::Red)),
-        AgentStatus::Dormant => Span::styled("Resting", Style::default().fg(Color::DarkGray)),
+        AgentStatus::Active => ("Active", Color::Green),
+        AgentStatus::Idle => ("Idle", Color::Gray),
+        AgentStatus::Waiting => ("Waiting", Color::Yellow),
+        AgentStatus::Permission => ("Permission", Color::Rgb(255, 170, 0)),
+        AgentStatus::Dormant => ("Resting", Color::DarkGray),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
-    use ratatui::buffer::Buffer;
 
-    #[test]
-    fn status_bar_renders_without_panic() {
-        let bar = StatusBar {
-            agents: vec![
-                AgentSummary {
-                    color: (255, 0, 0),
-                    project_name: "my-project".into(),
-                    status: AgentStatus::Active,
-                    tool_name: Some("Read".into()),
-                },
-                AgentSummary {
-                    color: (0, 255, 0),
-                    project_name: "other".into(),
-                    status: AgentStatus::Idle,
-                    tool_name: None,
-                },
-            ],
-            selected_info: Some(SelectedInfo {
-                project_name: "my-project".into(),
-                session_id: "abc123".into(),
-                status: AgentStatus::Active,
-                tool_name: Some("Read".into()),
-            }),
+    fn row(identity: &str, summary: &str, selected: bool) -> AgentRow {
+        AgentRow {
+            color: (255, 0, 0),
+            identity: identity.into(),
+            status: AgentStatus::Active,
+            summary: summary.into(),
+            selected,
+        }
+    }
+
+    fn panel(rows: Vec<AgentRow>, too_small: bool) -> AgentPanel {
+        AgentPanel {
+            rows,
             produce: ProduceCounts::default(),
-        };
-        let area = Rect::new(0, 0, 80, 1);
+            too_small,
+        }
+    }
+
+    // Row text; the blank cell that follows a wide glyph is skipped.
+    fn text_of(buf: &Buffer, y: u16) -> String {
+        let mut text = String::new();
+        let mut skip = 0;
+        for x in 0..buf.area.width {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            let symbol = buf[(x, y)].symbol();
+            skip = symbol.width().saturating_sub(1);
+            text.push_str(symbol);
+        }
+        text
+    }
+
+    fn render(panel: &AgentPanel, width: u16, height: u16) -> Buffer {
+        let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
-        (&bar).render(area, &mut buf);
+        panel.render(area, &mut buf);
+        buf
+    }
+
+    #[rstest]
+    #[case(0, 40, 1)] // no agents: footer only
+    #[case(3, 40, 4)] // fits
+    #[case(15, 20, 12)] // capped to leave MIN_TERMINAL_ROWS for the scene
+    #[case(10, 8, 1)] // never below the footer
+    fn height_leaves_room_for_the_scene(
+        #[case] agents: usize,
+        #[case] total: u16,
+        #[case] want: u16,
+    ) {
+        assert_eq!(AgentPanel::height_for(agents, total), want);
     }
 
     #[test]
-    fn status_bar_renders_empty() {
-        let bar = StatusBar {
-            agents: vec![],
-            selected_info: None,
-            produce: ProduceCounts::default(),
-        };
-        let area = Rect::new(0, 0, 40, 1);
-        let mut buf = Buffer::empty(area);
-        (&bar).render(area, &mut buf);
+    fn row_shows_identity_status_and_summary() {
+        let buf = render(
+            &panel(vec![row("farm (main)", "Bash: cargo test", false)], false),
+            80,
+            2,
+        );
+        let line = text_of(&buf, 0);
+        assert!(line.contains("farm (main)"), "{line}");
+        assert!(line.contains("Active"), "{line}");
+        assert!(line.contains("Bash: cargo test"), "{line}");
     }
 
     #[test]
-    fn status_bar_handles_zero_area() {
-        let bar = StatusBar {
-            agents: vec![AgentSummary {
-                color: (128, 128, 128),
-                project_name: "test".into(),
-                status: AgentStatus::Active,
-                tool_name: None,
-            }],
-            selected_info: None,
-            produce: ProduceCounts::default(),
-        };
+    fn long_summary_is_cut_to_the_row_width() {
+        let long = "x".repeat(200);
+        let buf = render(&panel(vec![row("farm", &long, false)], false), 60, 2);
+        let line = text_of(&buf, 0);
+        assert!(line.trim_end().ends_with('…'), "{line}");
+    }
+
+    #[test]
+    fn wide_characters_in_a_summary_are_not_split() {
+        let buf = render(
+            &panel(
+                vec![row("农场", "正在运行测试，请稍等片刻再继续操作", false)],
+                false,
+            ),
+            40,
+            2,
+        );
+        let line = text_of(&buf, 0);
+        assert!(line.contains("农场"), "{line}");
+        assert!(line.trim_end().ends_with('…'), "{line}");
+    }
+
+    #[test]
+    fn selected_row_is_highlighted() {
+        let buf = render(
+            &panel(vec![row("a", "x", false), row("b", "y", true)], false),
+            40,
+            3,
+        );
+        assert_eq!(buf[(5, 0)].bg, PANEL_BG);
+        assert_eq!(buf[(5, 1)].bg, SELECTED_BG);
+    }
+
+    #[test]
+    fn rows_beyond_the_height_are_dropped_but_the_footer_stays() {
+        let rows = (0..5)
+            .map(|i| row(&format!("p{i}"), "work", false))
+            .collect();
+        let buf = render(&panel(rows, false), 60, 3);
+        assert!(text_of(&buf, 0).contains("p0"));
+        assert!(text_of(&buf, 1).contains("p1"));
+        assert!(text_of(&buf, 2).contains("q quit"));
+    }
+
+    #[rstest]
+    #[case(false, false)]
+    #[case(true, true)]
+    fn too_small_hint_follows_the_flag(#[case] too_small: bool, #[case] shown: bool) {
+        let buf = render(&panel(vec![], too_small), 120, 1);
+        assert_eq!(text_of(&buf, 0).contains("enlarge terminal"), shown);
+    }
+
+    #[test]
+    fn zero_area_renders_nothing() {
         let area = Rect::new(0, 0, 0, 0);
         let mut buf = Buffer::empty(area);
-        (&bar).render(area, &mut buf);
-    }
-
-    #[test]
-    fn truncate_name_short() {
-        assert_eq!(truncate_name("hello", 12), "hello");
-    }
-
-    #[test]
-    fn truncate_name_long() {
-        let result = truncate_name("very-long-project-name", 12);
-        assert!(result.len() <= 14); // 11 + "…" (multi-byte)
-        assert!(result.ends_with('…'));
+        panel(vec![row("a", "b", false)], false).render(area, &mut buf);
     }
 }

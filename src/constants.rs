@@ -31,6 +31,15 @@ pub const JSONL_MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 /// Bytes read from the end of a transcript to rebuild an adopted agent's state.
 pub const REPLAY_TAIL_BYTES: u64 = 65_536;
 
+/// Smallest terminal width the farm view is drawn in, in columns.
+pub const MIN_TERMINAL_COLS: u16 = 40;
+
+/// Smallest scene height the farm view is drawn in, in rows, excluding the panel.
+pub const MIN_TERMINAL_ROWS: u16 = 8;
+
+/// Widest agent identity in the agent panel, in terminal columns.
+pub const NAME_MAX_WIDTH: usize = 12;
+
 /// Widest floating name label above a character, in terminal columns.
 pub const LABEL_MAX_WIDTH: usize = 8;
 
