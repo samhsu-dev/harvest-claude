@@ -36,8 +36,8 @@ pub struct ToolUse { pub id: String, pub name: String, pub input: serde_json::Va
 | User, prompt text | `Prompt { text }`; skipped when `isMeta` is true or the text starts with `<` |
 | System, top-level `subtype == "turn_duration"` | `TurnEnd` |
 | `ai-title` (`aiTitle`) | `Title { title, custom: false }` |
-| `custom-title` | `Title { title, custom: true }` |
-| `last-prompt` (`lastPrompt`) | `Prompt { text }` |
+| `custom-title` (`customTitle`) | `Title { title, custom: true }` |
+| `last-prompt` with `lastPrompt` | `Prompt { text }`; none when the field is absent |
 
 **extract_tool_use(value: &Value) -> Vec<ToolUse>** — `tool_use` blocks of `message.content`.
 

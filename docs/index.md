@@ -6,6 +6,7 @@
 | model.md | Entities, relations, agent status transitions, invariants, record-to-event mapping |
 | design.md | Module tree, action flow, ownership, shared types and constants |
 | impl.md | Crate findings, API gotchas, architecture decisions |
+| impl-transcript.md | Verified Claude Code transcript record shapes |
 | modules/engine-design.md | Farm state, character state machine, seats, pathfinding |
 | modules/watcher-design.md | Scanner, reader, agent state, registry, timers, focus |
 | modules/parser-design.md | Transcript record to event translation, tool detail rules |

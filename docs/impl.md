@@ -1,6 +1,6 @@
-# Claude Pixel TUI — Implementation
+# Harvest Claude — Implementation
 
-Rust crate research and API findings for the terminal pixel-art agent visualizer.
+Rust crate research and API findings for the terminal farm visualizer of Claude Code agents.
 
 ---
 
@@ -10,15 +10,21 @@ Rust crate research and API findings for the terminal pixel-art agent visualizer
 [dependencies]
 ratatui = "0.30"
 crossterm = "0.29"
-notify = "8.2"
+notify = "8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
-clap = { version = "4.6", features = ["derive"] }
-rand = "0.10"
+clap = { version = "4", features = ["derive"] }
+rand = "0.9"
 color-eyre = "0.6"
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+unicode-width = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+rstest = "0.27"
 ```
 
 ---
@@ -53,7 +59,7 @@ tracing-subscriber = "0.3"
 
 **[crossterm]** `Event::Resize(cols, rows)` — Terminal resize event. Must recompute PixelBuffer dimensions and re-render.
 
-### notify ^8.2 — File system watcher
+### notify ^8 — File system watcher
 
 **[notify]** `notify::recommended_watcher(tx) -> Result<impl Watcher>` — Creates platform-optimal watcher (FSEvents on macOS, inotify on Linux). Sends events to `mpsc::Sender`.
 
@@ -69,11 +75,11 @@ tracing-subscriber = "0.3"
 
 **[serde_json]** `serde_json::from_str::<Value>(line)` — Parse one JSONL line. Use `Value` for flexible field access (JSONL record schema varies by type).
 
-**[serde_json]** `value["type"].as_str()` — Dispatch on record type (`"assistant"`, `"user"`, `"system"`, `"progress"`). Returns `Option<&str>`.
+**[serde_json]** `value["type"].as_str()` — Dispatch on record type (`"assistant"`, `"user"`, `"system"`, `"ai-title"`, `"custom-title"`, `"last-prompt"`). No `"progress"` records exist. Returns `Option<&str>`.
 
 **[serde_json]** `value.pointer("/message/content")` — JSON Pointer for nested access. Useful for extracting tool_use blocks from deeply nested structures.
 
-**[serde_json]** Partial lines at EOF produce errors. Buffer incomplete lines: if `!line.ends_with('\n')`, carry in `line_buffer`, retry on next poll.
+**[serde_json]** Partial lines at EOF produce errors. Buffer raw bytes (`Vec<u8>`), split on `b'\n'`, and decode only complete lines with `String::from_utf8_lossy`; a read that ends inside a multibyte character must not be decoded.
 
 **[serde]** `#[serde(skip_serializing_if = "Option::is_none")]` — Omit optional fields in layout JSON. Keeps output compatible with VS Code extension.
 
@@ -81,7 +87,7 @@ tracing-subscriber = "0.3"
 
 **[dirs]** `dirs::home_dir() -> Option<PathBuf>` — Returns `~` on macOS/Linux. For `~/.claude/`: `dirs::home_dir().unwrap().join(".claude")`.
 
-### clap ^4.6 — CLI arguments
+### clap ^4 — CLI arguments
 
 **[clap]** `#[derive(Parser)] struct Args { ... }` — Derive macro generates CLI parser. `Args::parse()` at startup.
 
@@ -89,7 +95,7 @@ tracing-subscriber = "0.3"
 
 **[clap]** `#[arg(long)] watch_dir: Vec<PathBuf>` — Repeatable flag: `--watch-dir /path1 --watch-dir /path2`.
 
-### rand ^0.10 — Random numbers
+### rand ^0.9 — Random numbers
 
 **[rand]** `rand::rng()` — Thread-local RNG (renamed from `thread_rng()` in 0.8).
 
@@ -107,7 +113,35 @@ tracing-subscriber = "0.3"
 
 **[tracing]** `info!()`, `debug!()`, `warn!()`, `error!()` — Structured logging macros. In TUI app, log to file (not stdout): `tracing_subscriber::fmt().with_writer(file).init()`.
 
-**[tracing]** Log file path: `~/.pixel-agents/claude-pixel.log`. Create parent dir on startup.
+**[tracing]** Log directory: `~/.harvest-claude/logs/`. Created on startup.
+
+Transcript record shapes: `impl-transcript.md`.
+
+### unicode-width ^0.2 — Display width
+
+**[unicode-width]** `use unicode_width::{UnicodeWidthChar, UnicodeWidthStr}`; `str.width() -> usize`, `char.width() -> Option<usize>` (`None` for control characters). CJK characters are width 2, so byte or char counts misplace truncation.
+
+### tracing-appender ^0.2 — File logging
+
+**[tracing-appender]** `RollingFileAppender::builder().rotation(Rotation::DAILY).filename_prefix("harvest-claude").filename_suffix("log").max_log_files(3).build(dir)? -> Result<RollingFileAppender, InitError>` — files are named `harvest-claude.<YYYY-MM-DD>.log`; older files beyond the limit are deleted when a new file opens.
+
+**[tracing-appender]** `tracing_appender::non_blocking(appender) -> (NonBlocking, WorkerGuard)` — dropping the guard stops the writer thread and loses buffered lines; `main` holds it to exit.
+
+**[tracing-subscriber]** `fmt().with_writer(non_blocking).with_ansi(false).with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))` — needs feature `env-filter`.
+
+### ratatui additions
+
+**[ratatui]** `ratatui::restore()` — restores terminal (raw mode off, alternate screen left); callable repeatedly. Chain it in the panic hook: `let prev = std::panic::take_hook(); set_hook(Box::new(move |i| { let _ = restore_terminal(); prev(i) }))`.
+
+**[ratatui]** `buf.set_stringn(x, y, string, max_width, style) -> (u16, u16)` — writes at most `max_width` columns, width-aware; use for floating labels instead of byte slicing.
+
+### crossterm addition
+
+**[crossterm]** Raw mode delivers Ctrl+C as `KeyEvent { code: Char('c'), modifiers: KeyModifiers::CONTROL }`, not as SIGINT.
+
+### rstest ^0.27 — Table tests
+
+**[rstest]** `#[rstest] #[case(input, expected)] fn name(#[case] input: .., #[case] expected: ..)` — one test per case; used for the real-record-shape parser tests.
 
 ---
 
@@ -122,7 +156,7 @@ No async runtime needed. File reading is synchronous (seek + read_line). Renderi
 
 ### JSONL Polling vs fs.watch
 
-VS Code extension uses 500ms polling as primary strategy (fs.watch is unreliable cross-platform). TUI uses `notify` crate (FSEvents/inotify) as hint + polling fallback. When `notify` fires an event, immediately poll. Otherwise, poll every 500ms as fallback. This gives near-instant detection on most platforms with reliable fallback.
+VS Code extension uses 500ms polling as primary strategy (fs.watch is unreliable cross-platform). TUI reads every tracked transcript every `JSONL_POLL_MS` (500 ms) and uses `notify` only for discovery of new files, with directory re-scan every `SCAN_INTERVAL_MS` (3 s). This gives near-instant detection on most platforms with reliable fallback.
 
 ### Half-Block Rendering vs Canvas
 
@@ -138,7 +172,7 @@ VS Code extension uses `setTimeout`/`setInterval`. Rust TUI uses `Instant`-based
 
 ### Terminal Cleanup Safety
 
-Pattern: wrap terminal state in a guard struct with `Drop` impl. On panic, `color_eyre` panic hook calls `disable_raw_mode()` and `execute!(stdout, LeaveAlternateScreen, DisableMouseCapture)` before printing backtrace. This prevents terminal corruption on any exit path.
+Pattern: a guard struct whose `Drop` calls the idempotent `restore_terminal()`, plus a panic hook that calls it before the report prints. The `App` is built before the terminal enters raw mode, so startup errors print on a normal screen.
 
 ```rust
 struct TerminalGuard;
@@ -152,7 +186,7 @@ impl Drop for TerminalGuard {
 
 ### Layout Compatibility
 
-Layout JSON format matches VS Code extension: `{ version, cols, rows, tiles, furniture, tile_colors, layout_revision }`. TUI reads the same `~/.pixel-agents/layout.json` file. Both apps can coexist — TUI is read-only for layout (no editor in v1). Future: layout editor via keyboard-driven TUI interface.
+Layout JSON format matches VS Code extension: `{ version, cols, rows, tiles, furniture, tile_colors, layout_revision }`. TUI reads `~/.harvest-claude/layout.json`. The TUI never edits the layout; it writes only the bundled default when the file is missing and a backup before replacing an outdated revision.
 
 ---
 

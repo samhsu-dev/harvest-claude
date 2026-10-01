@@ -137,7 +137,7 @@ Removed: `MATRIX_DURATION_SECS`, `TOOL_DONE_DELAY_MS`, `DISMISSED_COOLDOWN_SECS`
 
 **restore_terminal() -> Result<()>** (`tui.rs`) — Behavior: disable raw mode, leave alternate screen, disable mouse capture. Idempotent. Called by `Drop` and the panic hook.
 
-**logging::init(dir: &Path) -> Result<WorkerGuard>** (`logging.rs`) — Behavior: non-blocking daily-rolling file appender at `<dir>/logs/harvest-claude.log`, at most 3 files kept, filter from `RUST_LOG` defaulting to `info`. `main` holds the guard for the process lifetime. Failure to create the directory returns an error that `main` reports and continues without logging.
+**logging::init(dir: &Path) -> Result<WorkerGuard>** (`logging.rs`) — Behavior: non-blocking daily-rolling file appender writing `<dir>/logs/harvest-claude.<date>.log`, at most 3 files kept, filter from `RUST_LOG` defaulting to `info`. `main` holds the guard for the process lifetime. Failure to create the directory returns an error that `main` reports and continues without logging.
 
 ## Error Handling
 
