@@ -1,39 +1,71 @@
 # UI Module Design
 
-Terminal user interface: status bar widget and input mapping.
+Terminal widgets below the scene and mouse hit-testing. Event sources: `design.md` (EventHandler, App).
+
+## Design Overview
 
 ```
 ui/
 ├── mod.rs
-├── status_bar.rs   # Bottom status bar widget
-└── input.rs        # Mouse/keyboard → Action mapping
+├── text.rs         # truncate_to_width (display-width aware)
+├── status_bar.rs   # AgentPanel widget (bottom area)
+└── input.rs        # cell → tile, character hit test
 ```
 
----
+- **Classes**: `AgentRow`, `ProduceCounts`, `AgentPanel`.
+- **Relationships**: `AgentPanel` contains `AgentRow` and `ProduceCounts`. `ui` imports `types`, `constants`, `engine` (hit test only).
+- **Roles**. Data holders: `AgentRow`, `ProduceCounts`. Widget: `AgentPanel`. Helpers: `truncate_to_width`, `tile_from_cell`, `hit_test_character`.
+- **Removed**: `SelectedInfo`, the single selected-agent line; the panel shows every Agent at once.
 
-## status_bar.rs
+## Class / Type Specifications
 
-Bottom bar widget. Implements `Widget` for `&StatusBar`.
+### AgentRow (`status_bar.rs`, data holder)
 
-**Layout**:
-- Left: agent count, palette-colored dots
-- Center: selected agent name + current tool + status text
-- Right: keybindings hint (`q:quit  ←→:select  esc:deselect`)
+`AgentRow { color: (u8,u8,u8), identity: String, status: AgentStatus, summary: String, selected: bool }`. Derives `Debug, Clone`. `identity` is `Agent::display_name`; `summary` is `Agent::summary`. The App builds one row per non-Dormant Agent, in Agent id order.
 
----
+### ProduceCounts (`status_bar.rs`, data holder)
 
-## input.rs
+`ProduceCounts { wheat: u32, fruit: u32, fish: u32 }`. Derives `Debug, Clone, Copy, Default`.
 
-Maps mouse events to semantic `Action` variants. Keyboard events map directly in `event.rs`; mouse requires hit-testing against office state.
+### AgentPanel (`status_bar.rs`, widget)
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `tile_from_cell` | `(col, row, offset: (u16, u16)) -> TilePos` | Terminal cell → tile (half-block aware: `pixel_y = row * 2`) |
-| `handle_mouse_click` | `(state: &OfficeState, tile: TilePos) -> Option<Action>` | Hit-test characters → `Action::Key` or bubble dismiss |
+`AgentPanel { rows: Vec<AgentRow>, produce: ProduceCounts, too_small: bool }`. Implements `Widget` for `&AgentPanel`.
 
-Mouse click flow: `Action::Mouse(event)` → `App::update()` calls `handle_mouse_click()` → returns optional follow-up `Action` (selection change, bubble dismiss).
+Layout, top to bottom, one terminal row each:
 
-Keyboard mapping (in `event.rs`, not here):
-- `q` / `Esc` → `Action::Quit`
-- `←` / `→` → cycle selection
-- Click character → select / dismiss bubble
+| Row | Content |
+|-----|---------|
+| One per Agent | `● <identity> │ <status> <summary>` with the dot in the Agent colour; the selected row highlighted |
+| Last | Produce counts, key hints `q quit  ←→ select  esc deselect  enter focus`, and when `too_small` the hint `enlarge terminal to see the full farm` |
+
+- Each row is padded or cut to the area width. The identity is cut to `NAME_MAX_WIDTH` columns, the summary takes the remaining columns.
+- Status text: `Active`, `Idle`, `Waiting`, `Permission`. Permission is drawn in the amber of the permission bubble.
+- Rows beyond the available height are dropped from the bottom; the final row is never dropped.
+- Panel height: `rows.len() + 1`, capped to leave at least `MIN_TERMINAL_ROWS` rows for the scene.
+
+## Function Specifications
+
+**truncate_to_width(text: &str, max_width: usize) -> String** (`text.rs`) — Longest prefix whose display width is at most `max_width`, measured with `unicode-width`. Appends `…` (width 1) when text was cut, within the limit. Never splits a character; a wide character that does not fit is dropped. Control characters are replaced by a space.
+
+**tile_from_cell(col, row, offset_x, offset_y) -> TilePos** (`input.rs`) — Terminal cell to tile. Half-block aware: `pixel_y = (row - offset_y) * 2`. Saturating subtraction.
+
+**hit_test_character(state, col, row, offset_x, offset_y) -> Option<usize>** (`input.rs`) — Agent id of the character at the clicked tile. The caller discards ids whose Agent is Dormant.
+
+## Input Mapping
+
+Keys are mapped in `App::update`, not here.
+
+| Input | Effect |
+|-------|--------|
+| `q`, `Esc` with nothing selected, `Ctrl+C` | Quit |
+| `Esc` with a selection | Deselect |
+| `←` `→` | Previous or next non-Dormant Agent |
+| `Enter` | Focus the selected Agent's terminal window |
+| Click on a character | Select; also dismiss its bubble |
+| Click elsewhere | Deselect |
+
+`Ctrl+C` is detected from `KeyModifiers::CONTROL` with `KeyCode::Char('c')` because raw mode delivers it as a key event.
+
+## Error Handling
+
+Rendering never fails on content: oversized text is truncated, an area narrower than a row is clipped. Below `MIN_TERMINAL_COLS` × `MIN_TERMINAL_ROWS` the App draws one centred notice instead of the panel and scene.

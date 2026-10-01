@@ -48,20 +48,22 @@ Procedural sprite generation. All sprites are hardcoded pixel arrays — no exte
 |----------|-----------|-------------|
 | `character_sprite` | `(palette, direction, anim, frame) -> SpriteData` | 8x16 character |
 | `floor_sprite` | `(tile: TileType) -> SpriteData` | 8x8 floor tile |
-| `wall_sprite` | `(neighbors: u8) -> SpriteData` | 8x16 wall, auto-tile bitmask |
+| `fence_sprite` | `(neighbors: u8) -> SpriteData` | Fence, auto-tile bitmask |
 | `furniture_sprite` | `(kind: &str) -> SpriteData` | 8x8 furniture item |
-| `status_bubble` | `(kind: BubbleKind) -> SpriteData` | 16x6 speech bubble |
+| `produce_sprite` | `(kind: &str, tier: u8) -> SpriteData` | Warehouse pile, tier 1–3 |
+| `companion_sprite` | `(kind: CompanionKind, frame: u8) -> SpriteData` | Chicken, cat, dog; 2 frames |
+| `status_bubble` | `(kind: BubbleKind) -> SpriteData` | Speech bubble; also `permission_bubble`, `waiting_bubble` |
 | `character_outline` | `(sprite: &SpriteData, alpha: u8) -> SpriteData` | White outline around opaque pixels |
 
-### Wall Auto-Tile Bitmask
+### Fence Auto-Tile Bitmask
 
-Built at render time from `tile_map` neighbors: N=1, E=2, S=4, W=8. 4-bit index into 16 sprite variants. Algorithm:
+Built at render time from tile map neighbors: N=1, E=2, S=4, W=8. 4-bit index into 16 variants. The tile type is `Fence`; no wall tile exists. Algorithm:
 ```
 mask = 0
-if north is Wall → mask |= 1
-if east is Wall  → mask |= 2
-if south is Wall → mask |= 4
-if west is Wall  → mask |= 8
+if north is Fence → mask |= 1
+if east is Fence → mask |= 2
+if south is Fence → mask |= 4
+if west is Fence → mask |= 8
 ```
 
 ### Outline Algorithm
@@ -77,22 +79,22 @@ if west is Wall  → mask |= 8
 
 Z-sorted scene composition onto PixelBuffer.
 
-```rust
-struct Drawable {
-    sprite: SpriteData,
-    x: i16,
-    y: i16,
-    z_y: f32,
-    flipped: bool,
-}
-```
+Callers convert engine state into plain render structs; `render` never imports `engine`.
+
+| Type | Content |
+|------|---------|
+| `SceneInput<'a>` | `tile_map: &[TileType]` (flat, row-major), `cols`, `rows`, `furniture: &[FurnitureRender]`, `characters: &[CharacterRender]`, `tile_colors: &[(TilePos, TileColor)]`, `selected: Option<usize>` |
+| `FurnitureRender` | `kind`, `col`, `row`, `color`, `is_seat`, `tier` (produce pile size) |
+| `CharacterRender` | palette, direction, anim type, frame, pixel position, hue shift, bubble (`BubbleRender`), companions (`CompanionRender`), flipped |
+| `BubbleRender` | `kind`, `timer` |
+| `CompanionRender` | `kind`, `offset_x`, `offset_y`, `frame` |
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `compose_scene` | `(buf: &mut PixelBuffer, state: &OfficeState, selected: Option<usize>)` | Full scene render |
-| `render_tiles` | `(buf: &mut PixelBuffer, state: &OfficeState)` | Floor + wall base layer |
-| `collect_drawables` | `(state: &OfficeState, selected: Option<usize>) -> Vec<Drawable>` | Gather all entities with z_y |
-| `render_sorted` | `(buf: &mut PixelBuffer, drawables: &mut [Drawable])` | Sort by z_y, blit in order |
+| `compose_scene` | `(buf: &mut PixelBuffer, input: &SceneInput<'_>)` | Clear, tiles, then z-sorted drawables |
+| `render_tiles` | `(buf, tile_map, cols, rows, tile_colors)` | Floor and fence base layer |
+| `collect_drawables` | `(furniture, characters, selected) -> Vec<Drawable>` | Private; gather entities with `z_y` |
+| `render_sorted` | `(buf, drawables: &mut [Drawable])` | Private; sort by `z_y`, blit in order |
 
 ### Z-Sort Rules
 
@@ -117,7 +119,7 @@ Two colorization modes for tiles, furniture, and character hue shifts.
 
 ### Colorize Mode (Photoshop-style)
 
-Grayscale input → fixed HSL output. Used for floor and wall tiles.
+Grayscale input → fixed HSL output. Used for floor and fence tiles.
 
 1. Perceived luminance: `L = (0.299*R + 0.587*G + 0.114*B) / 255`
 2. Contrast: `L = 0.5 + (L - 0.5) * ((100 + c) / 100)`
@@ -146,13 +148,11 @@ Alpha preserved from original pixel. Semi-transparent pixels (`alpha < 255`) ret
 
 ## bubble.rs
 
-Speech bubble sprites and timer logic.
+Speech bubble timer logic. `BubbleState` here is the render-side copy used by `update_bubble`; the engine owns the character's bubble. Its sprite functions duplicate `sprites::permission_bubble` and `sprites::waiting_bubble`; the engine and composer use the `sprites` versions.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `permission_bubble` | `() -> SpriteData` | Amber "..." bubble |
-| `waiting_bubble` | `() -> SpriteData` | Green checkmark bubble |
 | `update_bubble` | `(bubble: &mut BubbleState, dt: f32) -> bool` | Tick timer, `true` when expired |
 
-Waiting bubble: 2s display + 0.5s fade-out (`BUBBLE_FADE_DURATION_SEC`).
-Permission bubble: persistent until dismissed by click or new user prompt.
+Waiting bubble: `WAITING_BUBBLE_SECS` display then `BUBBLE_FADE_SECS` fade-out.
+Permission bubble: persistent until the pending tool completes, the user clicks it, or a new turn starts.

@@ -5,7 +5,7 @@ Layout persistence, serialization, version migration, and furniture catalog.
 ```
 layout/
 ├── mod.rs
-├── persistence.rs  # Layout/config file I/O (~/.pixel-agents/)
+├── persistence.rs  # Layout/config file I/O (~/.harvest-claude/)
 ├── serializer.rs   # OfficeLayout ↔ OfficeState conversion
 └── furniture.rs    # Furniture catalog, footprint, placement
 ```
@@ -16,11 +16,25 @@ layout/
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `load_layout` | `(path: &Path) -> Result<OfficeLayout>` | Read + deserialize + migrate |
-| `save_layout` | `(path: &Path, layout: &OfficeLayout) -> Result<()>` | Atomic write (write tmp, rename) |
-| `default_layout` | `() -> OfficeLayout` | Bundled default office |
-| `pixel_agents_dir` | `() -> Result<PathBuf>` | `~/.pixel-agents/`, create if missing |
-| `load_or_default` | `() -> Result<OfficeLayout>` | Try file → fallback to default |
+| `load_layout` | `(path: &Path) -> Result<OfficeLayout>` | Read, deserialize, `validate_layout`, migrate |
+| `save_layout` | `(path: &Path, layout: &OfficeLayout) -> Result<()>` | Atomic write (temp file, rename) |
+| `default_layout` | `() -> OfficeLayout` | Bundled default farm |
+| `config_dir` | `() -> Result<PathBuf>` | `~/.harvest-claude/`, created when missing |
+| `validate_layout` | `(layout: &OfficeLayout) -> Result<()>` | `tiles.len() == cols * rows`, `1 <= cols, rows <= MAX_COLS/MAX_ROWS`, every furniture anchor inside the grid |
+| `load_or_default` | `(path_override: Option<&Path>) -> Result<OfficeLayout>` | Policy below |
+
+### Load policy (`load_or_default`)
+
+The user file is never overwritten or deleted (`model.md` invariant).
+
+| File state | Result | Disk effect |
+|------------|--------|-------------|
+| Missing | Bundled default | Default written to the path |
+| Valid, revision current | File layout | None |
+| Valid, revision older than bundled | Bundled default, `warn` | Old file first copied to `layout.json.bak-r<revision>`, then replaced by the default |
+| Unreadable, malformed, or failing `validate_layout` | Bundled default in memory, `warn` naming the cause | None |
+
+An explicit `--layout` path follows the same table. A missing explicit path returns an error.
 
 ### Layout Version Migration
 
@@ -29,7 +43,7 @@ On load, apply migrations in order:
 1. **VOID value**: old value 8 → new value 0. Detected by `!layout_revision AND tiles.contains(8)`.
 2. **Furniture types**: legacy names mapped (`desk` → `DESK_FRONT`, `chair` → `WOODEN_CHAIR_FRONT`, etc.). Unmapped types pass through.
 3. **Tile colors**: old patterns (Floor1=beige, Floor2=brown, Floor3=purple, Floor4=tan) → generate `TileColor` per tile. No color for non-floor tiles.
-4. **Layout revision**: if bundled revision > file revision → reset to bundled default.
+4. **Layout revision**: if bundled revision > file revision → backup, then reset to bundled default (load policy).
 
 ---
 
