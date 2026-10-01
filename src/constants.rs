@@ -48,8 +48,6 @@ pub const SUMMARY_SOURCE_MAX_CHARS: usize = 200;
 
 /// Scanner thresholds.
 pub const EXTERNAL_THRESHOLD_SECS: u64 = 120;
-pub const DISMISSED_COOLDOWN_SECS: u64 = 180;
-pub const CLEAR_IDLE_THRESHOLD_MS: u64 = 2_000;
 pub const GLOBAL_MIN_FILE_SIZE: u64 = 3_072;
 
 /// Dormancy: stale threshold triggers dormant state (agent enters building).

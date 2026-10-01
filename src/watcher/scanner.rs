@@ -1,16 +1,13 @@
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use color_eyre::eyre::{Result, WrapErr};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::constants::{
-    DISMISSED_COOLDOWN_SECS, DORMANT_THRESHOLD_SECS, EXTERNAL_THRESHOLD_SECS, GLOBAL_MIN_FILE_SIZE,
-    REMOVED_THRESHOLD_SECS,
+    DORMANT_THRESHOLD_SECS, EXTERNAL_THRESHOLD_SECS, GLOBAL_MIN_FILE_SIZE, REMOVED_THRESHOLD_SECS,
 };
 
 /// Events emitted by the directory scanner.
@@ -32,19 +29,16 @@ pub enum ScanEvent {
 #[derive(Debug)]
 pub struct DirectoryScanner {
     watch_dirs: Vec<PathBuf>,
-    #[allow(dead_code)]
-    watcher: RecommendedWatcher,
+    /// Held so the filesystem watch stays registered until the scanner drops.
+    _watcher: RecommendedWatcher,
     events_rx: Receiver<notify::Result<Event>>,
     known_files: HashMap<PathBuf, SystemTime>,
     /// Files that went dormant (stale but not removed).
     dormant_files: HashMap<PathBuf, SystemTime>,
-    dismissed_files: HashMap<PathBuf, Instant>,
-    clear_dismissed: HashSet<PathBuf>,
     dormant_threshold: Duration,
     removed_threshold: Duration,
     external_threshold: Duration,
     min_file_size: u64,
-    pending_clear_files: HashSet<PathBuf>,
 }
 
 impl DirectoryScanner {
@@ -68,17 +62,14 @@ impl DirectoryScanner {
 
         Ok(Self {
             watch_dirs: dirs,
-            watcher,
+            _watcher: watcher,
             events_rx: rx,
             known_files: HashMap::new(),
             dormant_files: HashMap::new(),
-            dismissed_files: HashMap::new(),
-            clear_dismissed: HashSet::new(),
             dormant_threshold: Duration::from_secs(DORMANT_THRESHOLD_SECS),
             removed_threshold: Duration::from_secs(REMOVED_THRESHOLD_SECS),
             external_threshold: Duration::from_secs(EXTERNAL_THRESHOLD_SECS),
             min_file_size: GLOBAL_MIN_FILE_SIZE,
-            pending_clear_files: HashSet::new(),
         })
     }
 
@@ -117,16 +108,6 @@ impl DirectoryScanner {
 
         // Process changed paths.
         for path in changed_paths {
-            if self.clear_dismissed.contains(&path) {
-                continue;
-            }
-            if let Some(dismissed_at) = self.dismissed_files.get(&path) {
-                if dismissed_at.elapsed() < Duration::from_secs(DISMISSED_COOLDOWN_SECS) {
-                    continue;
-                }
-                self.dismissed_files.remove(&path);
-            }
-
             if !path.exists() {
                 if self.known_files.remove(&path).is_some()
                     || self.dormant_files.remove(&path).is_some()
@@ -157,29 +138,15 @@ impl DirectoryScanner {
             }
 
             if !self.known_files.contains_key(&path) && meta.len() > 0 {
-                // Two-tick adoption for /clear files.
-                if self.pending_clear_files.contains(&path) {
-                    self.pending_clear_files.remove(&path);
-                    if let Some((project_name, session_id)) = session_info(&path) {
-                        self.known_files.insert(path.clone(), mtime);
-                        events.push(ScanEvent::NewSession {
-                            path,
-                            project_name,
-                            session_id,
-                        });
-                    }
-                } else if is_within_threshold(mtime, now, self.external_threshold) {
-                    // Check if this is a new file that needs two-tick adoption.
-                    if self.check_clear(&path).unwrap_or(false) {
-                        self.pending_clear_files.insert(path);
-                    } else if let Some((project_name, session_id)) = session_info(&path) {
-                        self.known_files.insert(path.clone(), mtime);
-                        events.push(ScanEvent::NewSession {
-                            path,
-                            project_name,
-                            session_id,
-                        });
-                    }
+                if is_within_threshold(mtime, now, self.external_threshold)
+                    && let Some((project_name, session_id)) = session_info(&path)
+                {
+                    self.known_files.insert(path.clone(), mtime);
+                    events.push(ScanEvent::NewSession {
+                        path,
+                        project_name,
+                        session_id,
+                    });
                 }
             } else if self.known_files.contains_key(&path) {
                 // Update mtime for known files.
@@ -220,34 +187,6 @@ impl DirectoryScanner {
     /// Forget a path so its next write is reported as a new session again.
     pub fn forget(&mut self, path: &Path) {
         self.known_files.remove(path);
-    }
-
-    /// Mark a session path as dismissed with a cooldown period.
-    pub fn dismiss(&mut self, path: &Path) {
-        self.known_files.remove(path);
-        self.dormant_files.remove(path);
-        self.dismissed_files.insert(path.to_owned(), Instant::now());
-    }
-
-    /// Permanently dismiss a /clear file.
-    pub fn dismiss_clear(&mut self, path: &Path) {
-        self.known_files.remove(path);
-        self.dormant_files.remove(path);
-        self.clear_dismissed.insert(path.to_owned());
-    }
-
-    /// Check if a JSONL file contains a /clear command in its first 8KB.
-    pub fn check_clear(&self, path: &Path) -> Result<bool> {
-        let mut file =
-            File::open(path).wrap_err_with(|| format!("failed to open: {}", path.display()))?;
-
-        let mut buf = vec![0u8; 8192];
-        let n = file
-            .read(&mut buf)
-            .wrap_err_with(|| format!("failed to read: {}", path.display()))?;
-
-        let content = String::from_utf8_lossy(&buf[..n]);
-        Ok(content.contains("/clear</command-name>"))
     }
 
     // Recursively scan a directory for JSONL files.
@@ -300,16 +239,6 @@ impl DirectoryScanner {
     }
 }
 
-/// Replace `:`, `\`, `/` with `-` to create a filesystem-safe project hash.
-pub fn project_hash(path: &str) -> String {
-    path.chars()
-        .map(|c| match c {
-            ':' | '\\' | '/' => '-',
-            _ => c,
-        })
-        .collect()
-}
-
 /// Extract the project directory name and session id from a transcript path.
 ///
 /// Transcripts live at `<projects>/<project_dir>/<session_id>.jsonl`.
@@ -344,13 +273,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn project_hash_replaces_separators() {
-        assert_eq!(project_hash("/home/user/project"), "-home-user-project");
-        assert_eq!(project_hash("C:\\Users\\project"), "C--Users-project");
-        assert_eq!(project_hash("simple"), "simple");
-    }
-
-    #[test]
     fn forget_reports_the_next_write_as_a_new_session() {
         let root = tempfile::tempdir().unwrap();
         let mut scanner = DirectoryScanner::new(vec![root.path().to_owned()]).unwrap();
@@ -383,26 +305,6 @@ mod tests {
         assert!(is_jsonl_path(Path::new("session.jsonl")));
         assert!(!is_jsonl_path(Path::new("session.json")));
         assert!(!is_jsonl_path(Path::new("session")));
-    }
-
-    #[test]
-    fn check_clear_detects_command() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.jsonl");
-        std::fs::write(&path, "some data /clear</command-name> more").unwrap();
-
-        let scanner = DirectoryScanner::new(vec![dir.path().to_owned()]).unwrap();
-        assert!(scanner.check_clear(&path).unwrap());
-    }
-
-    #[test]
-    fn check_clear_negative() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.jsonl");
-        std::fs::write(&path, "normal session data without clear").unwrap();
-
-        let scanner = DirectoryScanner::new(vec![dir.path().to_owned()]).unwrap();
-        assert!(!scanner.check_clear(&path).unwrap());
     }
 
     #[test]
