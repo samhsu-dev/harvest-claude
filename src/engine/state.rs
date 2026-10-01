@@ -198,9 +198,13 @@ impl OfficeState {
         self.characters.iter_mut().find(|c| c.agent_id == agent_id)
     }
 
-    /// Find the character index at a given tile (hit-test).
+    /// Find the index of the visible character at a given tile (hit-test).
+    ///
+    /// Characters hidden while resting never match.
     pub fn character_at_tile(&self, pos: TilePos) -> Option<usize> {
-        self.characters.iter().position(|c| c.current_tile() == pos)
+        self.characters
+            .iter()
+            .position(|c| !c.is_dormant && c.current_tile() == pos)
     }
 
     /// Find the nearest walkable tile adjacent to a furniture type.

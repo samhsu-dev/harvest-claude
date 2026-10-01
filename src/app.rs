@@ -470,29 +470,43 @@ impl App {
         }
     }
 
+    // Agents the user can select: every agent that is not resting.
+    fn selectable_ids(&self) -> Vec<usize> {
+        self.office
+            .characters
+            .iter()
+            .map(|ch| ch.agent_id)
+            .filter(|&id| self.is_selectable(id))
+            .collect()
+    }
+
+    fn is_selectable(&self, agent_id: usize) -> bool {
+        self.agents
+            .get(agent_id)
+            .is_some_and(|a| a.status != AgentStatus::Dormant)
+    }
+
     fn cycle_selection(&mut self, forward: bool) {
-        let count = self.office.characters.len();
-        if count == 0 {
-            self.selected = None;
-            return;
-        }
-
-        let current_idx = self
+        let ids = self.selectable_ids();
+        let count = ids.len();
+        let current = self
             .selected
-            .and_then(|id| self.office.characters.iter().position(|c| c.agent_id == id));
-
-        let next_idx = match current_idx {
-            Some(idx) if forward => (idx + 1) % count,
-            Some(idx) => (idx + count - 1) % count,
-            None => 0,
+            .and_then(|selected| ids.iter().position(|&id| id == selected));
+        let next = match current {
+            _ if count == 0 => None,
+            Some(idx) if forward => Some((idx + 1) % count),
+            Some(idx) => Some((idx + count - 1) % count),
+            None => Some(0),
         };
-
-        self.selected = Some(self.office.characters[next_idx].agent_id);
+        self.selected = next.map(|idx| ids[idx]);
     }
 
     fn on_mouse_click(&mut self, col: u16, row: u16) {
         let (ox, oy) = self.render_origin;
-        let Some(agent_id) = input::hit_test_character(&self.office, col, row, ox, oy) else {
+        let hit = input::hit_test_character(&self.office, col, row, ox, oy)
+            .filter(|&id| self.is_selectable(id));
+        let Some(agent_id) = hit else {
+            self.selected = None;
             return;
         };
 
@@ -1072,5 +1086,79 @@ mod tests {
         }
         let extra = write_transcript(&project, "extra");
         assert!(app.adopt_session(extra, "-Users-u-proj".into(), "extra".into()));
+    }
+
+    fn adopt_many(app: &mut App, dir: &std::path::Path, count: usize) -> Vec<usize> {
+        let project = dir.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        (0..count)
+            .map(|i| {
+                let path = write_transcript(&project, &format!("s{i}"));
+                assert!(app.adopt_session(path, "proj".into(), format!("s{i}")));
+                app.agents.agents().last().unwrap().id
+            })
+            .collect()
+    }
+
+    fn rest(app: &mut App, id: usize) {
+        app.agents.get_mut(id).unwrap().status = AgentStatus::Dormant;
+        app.start_dormant_walk(id);
+    }
+
+    #[test]
+    fn arrow_keys_skip_resting_agents() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::for_test(dir.path().to_path_buf());
+        let ids = adopt_many(&mut app, dir.path(), 3);
+        rest(&mut app, ids[1]);
+        app.selected = Some(ids[0]);
+
+        app.cycle_selection(true);
+        assert_eq!(app.selected, Some(ids[2]));
+
+        app.cycle_selection(false);
+        assert_eq!(app.selected, Some(ids[0]));
+    }
+
+    #[test]
+    fn arrow_keys_select_nothing_when_every_agent_is_resting() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::for_test(dir.path().to_path_buf());
+        let ids = adopt_many(&mut app, dir.path(), 3);
+        for id in ids {
+            rest(&mut app, id);
+        }
+
+        app.cycle_selection(true);
+        assert_eq!(app.selected, None);
+    }
+
+    #[test]
+    fn clicking_a_resting_agent_does_not_select_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::for_test(dir.path().to_path_buf());
+        let ids = adopt_many(&mut app, dir.path(), 1);
+        rest(&mut app, ids[0]);
+        let (tx, ty) = app
+            .office
+            .character_by_agent(ids[0])
+            .unwrap()
+            .current_tile();
+
+        app.on_mouse_click(tx * TILE_SIZE, ty * TILE_SIZE / 2);
+
+        assert_eq!(app.selected, None);
+    }
+
+    #[test]
+    fn clicking_empty_floor_deselects() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::for_test(dir.path().to_path_buf());
+        let ids = adopt_many(&mut app, dir.path(), 3);
+        app.selected = Some(ids[0]);
+
+        app.on_mouse_click(u16::MAX, u16::MAX);
+
+        assert_eq!(app.selected, None);
     }
 }
