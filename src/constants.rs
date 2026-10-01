@@ -22,7 +22,6 @@ pub const REST_DURATION_MAX: f32 = 240.0;
 /// Timer durations.
 pub const JSONL_POLL_MS: u64 = 500;
 pub const SCAN_INTERVAL_MS: u64 = 3_000;
-pub const STALE_THRESHOLD_SECS: u64 = 600;
 pub const PERMISSION_TIMER_MS: u64 = 7_000;
 pub const TEXT_IDLE_TIMER_MS: u64 = 5_000;
 pub const TOOL_DONE_DELAY_MS: u64 = 300;

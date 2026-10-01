@@ -10,7 +10,7 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::constants::{
     DISMISSED_COOLDOWN_SECS, DORMANT_THRESHOLD_SECS, EXTERNAL_THRESHOLD_SECS, GLOBAL_MIN_FILE_SIZE,
-    REMOVED_THRESHOLD_SECS, STALE_THRESHOLD_SECS,
+    REMOVED_THRESHOLD_SECS,
 };
 
 /// Events emitted by the directory scanner.
@@ -40,7 +40,6 @@ pub struct DirectoryScanner {
     dormant_files: HashMap<PathBuf, SystemTime>,
     dismissed_files: HashMap<PathBuf, Instant>,
     clear_dismissed: HashSet<PathBuf>,
-    active_threshold: Duration,
     dormant_threshold: Duration,
     removed_threshold: Duration,
     external_threshold: Duration,
@@ -75,7 +74,6 @@ impl DirectoryScanner {
             dormant_files: HashMap::new(),
             dismissed_files: HashMap::new(),
             clear_dismissed: HashSet::new(),
-            active_threshold: Duration::from_secs(STALE_THRESHOLD_SECS),
             dormant_threshold: Duration::from_secs(DORMANT_THRESHOLD_SECS),
             removed_threshold: Duration::from_secs(REMOVED_THRESHOLD_SECS),
             external_threshold: Duration::from_secs(EXTERNAL_THRESHOLD_SECS),
@@ -148,7 +146,7 @@ impl DirectoryScanner {
             // Wake up dormant files that become active again.
             if self.dormant_files.remove(&path).is_some() {
                 self.known_files.insert(path.clone(), mtime);
-                if let Some((project_name, session_id)) = extract_session_info(&path) {
+                if let Some((project_name, session_id)) = session_info(&path) {
                     events.push(ScanEvent::NewSession {
                         path,
                         project_name,
@@ -162,7 +160,7 @@ impl DirectoryScanner {
                 // Two-tick adoption for /clear files.
                 if self.pending_clear_files.contains(&path) {
                     self.pending_clear_files.remove(&path);
-                    if let Some((project_name, session_id)) = extract_session_info(&path) {
+                    if let Some((project_name, session_id)) = session_info(&path) {
                         self.known_files.insert(path.clone(), mtime);
                         events.push(ScanEvent::NewSession {
                             path,
@@ -174,7 +172,7 @@ impl DirectoryScanner {
                     // Check if this is a new file that needs two-tick adoption.
                     if self.check_clear(&path).unwrap_or(false) {
                         self.pending_clear_files.insert(path);
-                    } else if let Some((project_name, session_id)) = extract_session_info(&path) {
+                    } else if let Some((project_name, session_id)) = session_info(&path) {
                         self.known_files.insert(path.clone(), mtime);
                         events.push(ScanEvent::NewSession {
                             path,
@@ -285,7 +283,7 @@ impl DirectoryScanner {
             }
 
             let mtime = meta.modified().unwrap_or(now);
-            if !is_within_threshold(mtime, now, self.active_threshold) {
+            if !is_within_threshold(mtime, now, self.dormant_threshold) {
                 continue;
             }
 
@@ -307,26 +305,12 @@ pub fn project_hash(path: &str) -> String {
         .collect()
 }
 
-// Extract project name and session ID from a JSONL file path.
-//
-// Expected path pattern: `.../projects/<project_hash>/sessions/<session_id>/...`
-fn extract_session_info(path: &Path) -> Option<(String, String)> {
-    let components: Vec<&str> = path
-        .components()
-        .filter_map(|c| c.as_os_str().to_str())
-        .collect();
-
-    // Look for "sessions" component and extract session_id after it.
-    let sessions_idx = components.iter().position(|&c| c == "sessions")?;
-    let session_id = components.get(sessions_idx + 1)?.to_string();
-
-    // Look for "projects" component and extract project_name after it.
-    let projects_idx = components.iter().position(|&c| c == "projects");
-    let project_name = match projects_idx {
-        Some(idx) => components.get(idx + 1).unwrap_or(&"unknown").to_string(),
-        None => "unknown".to_string(),
-    };
-
+/// Extract the project directory name and session id from a transcript path.
+///
+/// Transcripts live at `<projects>/<project_dir>/<session_id>.jsonl`.
+pub fn session_info(path: &Path) -> Option<(String, String)> {
+    let session_id = path.file_stem()?.to_str()?.to_owned();
+    let project_name = path.parent()?.file_name()?.to_str()?.to_owned();
     Some((project_name, session_id))
 }
 
@@ -389,10 +373,40 @@ mod tests {
     }
 
     #[test]
-    fn extract_session_info_from_path() {
-        let path = PathBuf::from("/home/.claude/projects/my-project/sessions/abc123/data.jsonl");
-        let (project, session) = extract_session_info(&path).unwrap();
-        assert_eq!(project, "my-project");
-        assert_eq!(session, "abc123");
+    fn session_info_uses_file_stem_and_parent_directory() {
+        let path = PathBuf::from("/home/u/.claude/projects/-Users-u-proj/0a1b-2c3d.jsonl");
+        let (project, session) = session_info(&path).unwrap();
+        assert_eq!(project, "-Users-u-proj");
+        assert_eq!(session, "0a1b-2c3d");
+    }
+
+    #[test]
+    fn poll_reports_new_transcript_in_project_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let mut scanner = DirectoryScanner::new(vec![root.path().to_owned()]).unwrap();
+        let project = root.path().join("-Users-u-proj");
+        std::fs::create_dir(&project).unwrap();
+        let path = project.join("0a1b-2c3d.jsonl");
+        std::fs::write(&path, "{\"type\":\"user\"}\n").unwrap();
+
+        let mut found = None;
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(100));
+            found = scanner.poll().into_iter().find_map(|e| match e {
+                ScanEvent::NewSession {
+                    project_name,
+                    session_id,
+                    ..
+                } => Some((project_name, session_id)),
+                _ => None,
+            });
+            if found.is_some() {
+                break;
+            }
+        }
+        assert_eq!(
+            found,
+            Some(("-Users-u-proj".to_owned(), "0a1b-2c3d".to_owned()))
+        );
     }
 }

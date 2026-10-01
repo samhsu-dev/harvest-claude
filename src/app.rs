@@ -23,7 +23,7 @@ use crate::ui::input;
 use crate::ui::status_bar::{AgentSummary, SelectedInfo, StatusBar};
 use crate::watcher::focus;
 use crate::watcher::registry::AgentRegistry;
-use crate::watcher::scanner::{DirectoryScanner, ScanEvent};
+use crate::watcher::scanner::{DirectoryScanner, ScanEvent, session_info};
 use crate::watcher::timer::{TimerEvent, TimerManager};
 
 /// Application orchestrator. Receives `Action`, updates state, renders.
@@ -95,7 +95,7 @@ impl App {
             if self.office.characters.len() >= MAX_AGENTS {
                 break;
             }
-            if let Some((project_name, session_id)) = extract_session_info(&path)
+            if let Some((project_name, session_id)) = session_info(&path)
                 && let Ok(id) = self.agents.add_agent(session_id, path, project_name)
             {
                 let (palette, hue_shift) = self.agents.assign_palette();
@@ -777,12 +777,6 @@ fn pick_companion_kind(agent_id: usize, tool_id: &str) -> CompanionKind {
         1 => CompanionKind::Cat,
         _ => CompanionKind::Dog,
     }
-}
-
-fn extract_session_info(path: &std::path::Path) -> Option<(String, String)> {
-    let session_id = path.file_stem()?.to_str()?.to_owned();
-    let project_name = path.parent()?.file_name()?.to_str()?.to_owned();
-    Some((project_name, session_id))
 }
 
 fn parse_tile_key(key: &str) -> Option<(u16, u16)> {
