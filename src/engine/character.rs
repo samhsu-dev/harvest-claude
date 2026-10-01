@@ -526,7 +526,7 @@ impl Character {
         }
 
         // Finished a wander path
-        self.wander_count += 1;
+        self.wander_count = self.wander_count.saturating_add(1);
         self.state = CharState::Idle;
         self.anim_frame = 0;
         self.anim_timer = 0.0;
@@ -572,6 +572,14 @@ mod tests {
 
     use super::{BubbleState, Character};
     use crate::types::{AnimType, BubbleKind, CharState, Direction};
+
+    #[test]
+    fn wander_count_saturates_when_paths_complete_far_from_a_seat() {
+        let mut ch = Character::new(0, (3, 4), 0, None);
+        ch.wander_count = u8::MAX;
+        ch.arrive_at_destination(&[]);
+        assert_eq!(ch.wander_count, u8::MAX);
+    }
 
     #[test]
     fn new_character_is_idle() {
