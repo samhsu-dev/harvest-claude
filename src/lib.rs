@@ -14,12 +14,16 @@ pub mod watcher;
 use clap::Parser;
 use color_eyre::eyre::Result;
 
-/// Entry point: install error handling, parse CLI, run the application.
+/// Entry point: install error handling, parse CLI, build the app, run it.
+///
+/// The app is built before the terminal enters raw mode, so startup errors print on the normal
+/// screen.
 pub fn run() -> Result<()> {
     color_eyre::install()?;
+    tui::install_panic_hook();
     let args = cli::Args::parse();
-    let mut terminal_guard = tui::TerminalGuard::new()?;
     let mut app = app::App::new(args)?;
+    let mut terminal_guard = tui::TerminalGuard::new()?;
     app.run(&mut terminal_guard)?;
     Ok(())
 }

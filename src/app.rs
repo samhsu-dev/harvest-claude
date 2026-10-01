@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
-use color_eyre::eyre::{Result, WrapErr};
+use color_eyre::eyre::{Result, WrapErr, bail};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Position};
 use ratatui::style::{Color, Style};
@@ -60,7 +60,16 @@ fn load_persistent_warehouse(
 
 impl App {
     /// Create a new App from CLI arguments.
+    ///
+    /// # Errors
+    /// Returns an error when an explicit `--watch-dir` is not a directory, the layout cannot be
+    /// loaded, or the initial scan fails.
     pub fn new(args: Args) -> Result<Self> {
+        for dir in &args.watch_dir {
+            if !dir.is_dir() {
+                bail!("--watch-dir {} is not a directory", dir.display());
+            }
+        }
         let layout = persistence::load_or_default(args.layout.as_deref())
             .wrap_err("failed to load layout")?;
         let office = OfficeState::from_layout(layout);
@@ -79,7 +88,7 @@ impl App {
 
         let (config_dir, wh) = load_persistent_warehouse(persistence::config_dir().ok());
 
-        Ok(Self {
+        let mut app = Self {
             office,
             agents,
             scanner,
@@ -89,14 +98,13 @@ impl App {
             selected: None,
             running: true,
             render_origin: (0, 0),
-        })
+        };
+        app.adopt_existing_sessions()?;
+        Ok(app)
     }
 
-    /// Run the main event loop.
-    pub fn run(&mut self, terminal: &mut TerminalGuard) -> Result<()> {
-        let events = EventHandler::new();
-
-        // Discover existing sessions (capped at MAX_AGENTS)
+    /// Adopt the transcripts found by the initial scan, newest first, up to `MAX_AGENTS`.
+    fn adopt_existing_sessions(&mut self) -> Result<()> {
         let initial = self
             .scanner
             .initial_scan()
@@ -106,6 +114,12 @@ impl App {
                 self.adopt_session(path, project_name, session_id);
             }
         }
+        Ok(())
+    }
+
+    /// Run the main event loop.
+    pub fn run(&mut self, terminal: &mut TerminalGuard) -> Result<()> {
+        let events = EventHandler::new();
 
         loop {
             let action = events.next().wrap_err("event receive failed")?;
@@ -968,6 +982,35 @@ mod tests {
             KeyModifiers::NONE,
         )));
         assert!(app.running);
+    }
+
+    #[test]
+    fn missing_explicit_watch_dir_is_an_error_naming_the_path() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("no-such-dir");
+        let args = Args {
+            watch_dir: vec![missing],
+            layout: None,
+        };
+
+        let err = App::new(args).err().expect("startup must fail");
+
+        assert!(format!("{err:#}").contains("no-such-dir"));
+    }
+
+    #[test]
+    fn explicit_watch_dir_that_is_a_file_is_an_error() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("plain-file");
+        std::fs::write(&file, "x").unwrap();
+        let args = Args {
+            watch_dir: vec![file],
+            layout: None,
+        };
+
+        let err = App::new(args).err().expect("startup must fail");
+
+        assert!(format!("{err:#}").contains("plain-file"));
     }
 
     #[test]

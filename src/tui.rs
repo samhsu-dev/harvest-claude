@@ -2,6 +2,7 @@ use std::io::{self, Stdout};
 
 use color_eyre::eyre::Result;
 use crossterm::{
+    cursor::Show,
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -27,12 +28,47 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        );
-        let _ = self.terminal.show_cursor();
+        // Nothing useful can be done with a restore failure while unwinding or exiting.
+        let _ = restore_terminal();
+    }
+}
+
+/// Leave raw mode, the alternate screen, and mouse capture, and show the cursor.
+///
+/// Safe to call more than once and when the terminal was never set up.
+///
+/// # Errors
+/// Returns the first terminal I/O error; every step is still attempted.
+pub fn restore_terminal() -> Result<()> {
+    let raw = disable_raw_mode();
+    let screen = execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        Show
+    );
+    raw?;
+    screen?;
+    Ok(())
+}
+
+/// Restore the terminal before the previous panic hook prints its report, so the report is
+/// readable on the normal screen.
+pub fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = restore_terminal();
+        previous(info);
+    }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::restore_terminal;
+
+    #[test]
+    fn restore_terminal_is_idempotent() {
+        restore_terminal().unwrap();
+        restore_terminal().unwrap();
     }
 }
