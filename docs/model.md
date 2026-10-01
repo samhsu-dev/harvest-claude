@@ -87,14 +87,14 @@ Character visibility:
 - A Companion exists only for a tool id present in its Agent's background markers.
 - A Dormant Agent has no Tool Activity, no Heuristic Timer, no Speech Bubble, and no Companion.
 - Dormant Agents do not count toward the visible agent limit and are never the selected agent.
-- The number of non-Dormant Agents never exceeds the visible agent limit.
+- Adopting a new Session Transcript never raises the number of non-Dormant Agents above the visible agent limit. A refused transcript is adopted on a later write once a slot is free. A Dormant Agent wakes regardless of the limit.
 - Every Seat has at most one occupant, and a Character occupies at most one Seat.
 - A Palette is held by an Agent from creation to removal and released on removal; usage counts equal the number of live Agents holding that palette.
 - Every Agent has a Project Identity; it is never the raw hash once a Record with a working directory has been read.
 - Activity Summary is truncated by display width, never inside a multi-byte character.
 - Warehouse counts never decrease during a run and are written atomically.
 - A Layout is applied only when its tile count equals columns × rows, dimensions are within bounds, and every furniture position lies inside the grid.
-- The bundled default Layout is replaced on revision change only when the loaded file is itself the bundled default; a user-edited Layout is never replaced.
+- A user Layout file is never overwritten or deleted. A file older than the bundled revision is replaced in memory by the bundled default only after the old file is preserved as a backup. An invalid file is ignored in memory and left untouched on disk.
 
 ## Cross-Structure Contracts
 
