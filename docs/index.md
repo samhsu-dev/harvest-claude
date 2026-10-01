@@ -3,6 +3,7 @@
 | File | Content |
 |------|---------|
 | idea.md | Concepts and terminology: agent, transcript, status, summary, farm, produce |
+| model.md | Entities, relations, agent status transitions, invariants, record-to-event mapping |
 | design.md | Module tree, action flow, ownership, shared types and constants |
 | impl.md | Crate findings, API gotchas, architecture decisions |
 | modules/engine-design.md | Farm state, character state machine, seats, pathfinding |
