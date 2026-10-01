@@ -28,6 +28,12 @@ pub const TEXT_IDLE_TIMER_MS: u64 = 5_000;
 pub const TOOL_DONE_DELAY_MS: u64 = 300;
 pub const JSONL_READ_CAP: u64 = 65_536;
 
+/// Longest transcript line kept in memory; longer lines are skipped.
+pub const JSONL_MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Bytes read from the end of a transcript to rebuild an adopted agent's state.
+pub const REPLAY_TAIL_BYTES: u64 = 65_536;
+
 /// Scanner thresholds.
 pub const EXTERNAL_THRESHOLD_SECS: u64 = 120;
 pub const DISMISSED_COOLDOWN_SECS: u64 = 180;
