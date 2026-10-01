@@ -157,18 +157,42 @@ impl App {
         if self.live_agent_count() >= MAX_AGENTS {
             return false;
         }
-        match self.agents.add_agent(session_id, path, project_name) {
-            Ok(id) => {
-                if let Some(agent) = self.agents.get(id) {
-                    self.office
-                        .add_character(id, agent.palette, agent.hue_shift);
-                }
-                true
-            }
+        let id = match self.agents.add_agent(session_id, path, project_name) {
+            Ok(id) => id,
             Err(e) => {
-                tracing::warn!("failed to adopt session: {e}");
-                false
+                tracing::warn!("failed to adopt session: {e:#}");
+                return false;
             }
+        };
+        if let Err(e) = self.agents.replay(id) {
+            tracing::warn!(agent_id = id, "failed to replay transcript: {e:#}");
+            self.agents.remove_agent(id);
+            return false;
+        }
+        if let Some(agent) = self.agents.get(id) {
+            self.office
+                .add_character(id, agent.palette, agent.hue_shift);
+        }
+        self.sync_replayed(id);
+        true
+    }
+
+    // Shows what the replayed transcript says the agent is doing, without a permission bubble.
+    fn sync_replayed(&mut self, agent_id: usize) {
+        let Some(agent) = self.agents.get(agent_id) else {
+            return;
+        };
+        let tool_name = agent.tools.last().map(|tool| tool.name.clone());
+        let needs_approval = agent.is_running_non_exempt();
+        let background: Vec<String> = agent.background_tool_ids.iter().cloned().collect();
+        if let Some(tool_name) = tool_name {
+            self.send_to_seat(agent_id, &tool_name);
+        }
+        if needs_approval {
+            self.timers.start_permission(agent_id);
+        }
+        for tool_id in background {
+            self.add_companion(agent_id, &tool_id);
         }
     }
 
@@ -351,6 +375,11 @@ impl App {
         {
             ch.wake_from_dormant();
         }
+        self.send_to_seat(agent_id, tool_name);
+    }
+
+    // Marks the character active and walks it to its seat.
+    fn send_to_seat(&mut self, agent_id: usize, tool_name: &str) {
         // Compute path before mutable borrow of character
         let seat_and_path = self.office.character_by_agent(agent_id).map(|ch| {
             let seat_pos = ch.seat_id.map(|sid| {
@@ -926,6 +955,30 @@ mod tests {
         }));
         assert_eq!(app.agents.get(id).unwrap().status, AgentStatus::Active);
         assert!(app.office.character_by_agent(id).unwrap().bubble.is_none());
+    }
+
+    #[test]
+    fn adopting_a_transcript_with_a_running_tool_shows_the_agent_working() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let path = write_transcript(&project, "s1");
+        append_line(
+            &path,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo test"}}]}}"#,
+        );
+        let mut app = App::for_test(dir.path().to_path_buf());
+
+        assert!(app.adopt_session(path, "proj".into(), "s1".into()));
+
+        let id = app.agents.agents()[0].id;
+        let agent = app.agents.get(id).unwrap();
+        assert_eq!(agent.status, AgentStatus::Active);
+        assert_eq!(agent.summary(), "Bash: cargo test");
+        let ch = app.office.character_by_agent(id).unwrap();
+        assert!(ch.is_active);
+        assert!(ch.bubble.is_none());
+        assert!(app.timers.permission_pending(id));
     }
 
     #[test]

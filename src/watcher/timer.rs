@@ -34,6 +34,12 @@ impl TimerManager {
         self.permission_timers.insert(agent_id, deadline);
     }
 
+    /// Whether a permission timer is pending for an agent.
+    #[cfg(test)]
+    pub(crate) fn permission_pending(&self, agent_id: usize) -> bool {
+        self.permission_timers.contains_key(&agent_id)
+    }
+
     /// Cancel the permission timer for an agent.
     pub fn cancel_permission(&mut self, agent_id: usize) {
         self.permission_timers.remove(&agent_id);

@@ -21,12 +21,6 @@ pub struct JsonlReader {
 }
 
 impl JsonlReader {
-    /// Open a JSONL file and seek to the end (tail mode).
-    pub fn new(path: PathBuf) -> Result<Self> {
-        let end = Self::file_len(&path)?;
-        Ok(Self::at(path, end, false))
-    }
-
     /// Open a JSONL file at `tail` bytes before the end (or at the start when
     /// the file is shorter). A line cut by the start offset is discarded.
     pub fn new_from_tail(path: PathBuf, tail: u64) -> Result<Self> {
@@ -168,14 +162,13 @@ mod tests {
     }
 
     #[test]
-    fn tail_mode_skips_existing_content() {
+    fn tail_longer_than_file_reads_existing_lines_then_follows() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.jsonl");
         std::fs::write(&path, "{\"old\":1}\n").unwrap();
 
-        let mut reader = JsonlReader::new(path.clone()).unwrap();
-        let lines = reader.read_new_lines().unwrap();
-        assert!(lines.is_empty());
+        let mut reader = JsonlReader::new_from_tail(path.clone(), 1024).unwrap();
+        assert_eq!(reader.read_new_lines().unwrap(), vec!["{\"old\":1}"]);
 
         let mut f = std::fs::OpenOptions::new()
             .append(true)
@@ -183,8 +176,7 @@ mod tests {
             .unwrap();
         f.write_all(b"{\"new\":2}\n").unwrap();
 
-        let lines = reader.read_new_lines().unwrap();
-        assert_eq!(lines, vec!["{\"new\":2}"]);
+        assert_eq!(reader.read_new_lines().unwrap(), vec!["{\"new\":2}"]);
     }
 
     #[test]

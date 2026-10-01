@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
 
-use crate::constants::{HUE_SHIFT_MIN_DEG, HUE_SHIFT_RANGE_DEG, PALETTE_COUNT};
+use crate::constants::{HUE_SHIFT_MIN_DEG, HUE_SHIFT_RANGE_DEG, PALETTE_COUNT, REPLAY_TAIL_BYTES};
 use crate::types::AgentEvent;
 use crate::watcher::agent::{Agent, ApplyOutcome};
 use crate::watcher::jsonl::JsonlReader;
@@ -46,7 +46,7 @@ impl AgentRegistry {
         path: PathBuf,
         hash_dir: String,
     ) -> Result<usize> {
-        let reader = JsonlReader::new(path.clone())?;
+        let reader = JsonlReader::new_from_tail(path.clone(), REPLAY_TAIL_BYTES)?;
         let id = self.next_id;
         self.next_id += 1;
 
@@ -56,6 +56,30 @@ impl AgentRegistry {
         ));
         self.readers.insert(id, reader);
         Ok(id)
+    }
+
+    /// Apply the transcript tail to an agent that was just added.
+    ///
+    /// Only the agent's state changes; the caller maps the result onto the scene.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the agent is unknown or its transcript cannot be read.
+    pub fn replay(&mut self, id: usize) -> Result<()> {
+        let reader = self
+            .readers
+            .get_mut(&id)
+            .ok_or_else(|| eyre!("no reader for agent {id}"))?;
+        let lines = reader.read_new_lines()?;
+        let agent = self
+            .agents
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or_else(|| eyre!("unknown agent {id}"))?;
+        for event in events_of(&lines) {
+            agent.apply(&event);
+        }
+        Ok(())
     }
 
     /// Remove an agent and its reader, and release its palette.
@@ -84,10 +108,8 @@ impl AgentRegistry {
                     continue;
                 }
             };
-            let applied: AppliedEvents = lines
-                .iter()
-                .filter_map(|line| parser::parse_line(line))
-                .flat_map(|record| parser::extract_events(&record))
+            let applied: AppliedEvents = events_of(&lines)
+                .into_iter()
                 .map(|event| {
                     let outcome = agent.apply(&event);
                     (event, outcome)
@@ -137,6 +159,14 @@ impl AgentRegistry {
     }
 }
 
+fn events_of(lines: &[String]) -> Vec<AgentEvent> {
+    lines
+        .iter()
+        .filter_map(|line| parser::parse_line(line))
+        .flat_map(|record| parser::extract_events(&record))
+        .collect()
+}
+
 impl Default for AgentRegistry {
     fn default() -> Self {
         Self::new()
@@ -177,6 +207,34 @@ mod tests {
         reg.remove_agent(id);
         assert!(reg.agents().is_empty());
         assert!(!reg.has_path(&path));
+    }
+
+    #[test]
+    fn replay_applies_the_tail_so_later_polls_report_only_new_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = create_test_jsonl(dir.path());
+        append(
+            &path,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#,
+        );
+        let mut reg = AgentRegistry::new();
+        let id = reg.add_agent("s".into(), path.clone(), "p".into()).unwrap();
+
+        reg.replay(id).unwrap();
+
+        assert_eq!(reg.get(id).unwrap().status, AgentStatus::Active);
+        assert!(reg.poll_all().is_empty());
+        append(
+            &path,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
+        );
+        assert_eq!(reg.poll_all().len(), 1);
+    }
+
+    #[test]
+    fn replay_of_an_unknown_agent_is_an_error() {
+        let mut reg = AgentRegistry::new();
+        assert!(reg.replay(7).is_err());
     }
 
     #[test]
