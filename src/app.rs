@@ -92,14 +92,8 @@ impl App {
             .initial_scan()
             .wrap_err("failed initial scan")?;
         for path in initial {
-            if self.office.characters.len() >= MAX_AGENTS {
-                break;
-            }
-            if let Some((project_name, session_id)) = session_info(&path)
-                && let Ok(id) = self.agents.add_agent(session_id, path, project_name)
-            {
-                let (palette, hue_shift) = self.agents.assign_palette();
-                self.office.add_character(id, palette, hue_shift);
+            if let Some((project_name, session_id)) = session_info(&path) {
+                self.adopt_session(path, project_name, session_id);
             }
         }
 
@@ -115,6 +109,57 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Number of agents that count toward `MAX_AGENTS` (every non-Dormant agent).
+    fn live_agent_count(&self) -> usize {
+        self.agents
+            .agents()
+            .iter()
+            .filter(|a| a.status != AgentStatus::Dormant)
+            .count()
+    }
+
+    /// Adopt a transcript as a new agent. Returns false when refused at the limit
+    /// or when the transcript cannot be opened.
+    fn adopt_session(
+        &mut self,
+        path: std::path::PathBuf,
+        project_name: String,
+        session_id: String,
+    ) -> bool {
+        if self.live_agent_count() >= MAX_AGENTS {
+            return false;
+        }
+        match self.agents.add_agent(session_id, path, project_name) {
+            Ok(id) => {
+                let (palette, hue_shift) = self.agents.assign_palette();
+                self.office.add_character(id, palette, hue_shift);
+                true
+            }
+            Err(e) => {
+                tracing::warn!("failed to adopt session: {e}");
+                false
+            }
+        }
+    }
+
+    /// Remove the agent tracking `path`, with its character, timers, and selection.
+    fn remove_session(&mut self, path: &std::path::Path) {
+        let id = self
+            .agents
+            .agents()
+            .iter()
+            .find(|a| a.jsonl_path == path)
+            .map(|a| a.id);
+        if let Some(id) = id {
+            self.office.remove_character(id);
+            self.agents.remove_agent(id);
+            self.timers.cancel_all(id);
+            if self.selected == Some(id) {
+                self.selected = None;
+            }
+        }
     }
 
     /// Match action, mutate state.
@@ -214,11 +259,9 @@ impl App {
                     if self.agents.has_path(&path) {
                         continue;
                     }
-                    if self.office.characters.len() < MAX_AGENTS
-                        && let Ok(id) = self.agents.add_agent(session_id, path, project_name)
-                    {
-                        let (palette, hue_shift) = self.agents.assign_palette();
-                        self.office.add_character(id, palette, hue_shift);
+                    if !self.adopt_session(path.clone(), project_name, session_id) {
+                        // Refused at the limit: let the next write report it again.
+                        self.scanner.forget(&path);
                     }
                 }
                 ScanEvent::SessionDormant { path } => {
@@ -240,22 +283,7 @@ impl App {
                         }
                     }
                 }
-                ScanEvent::SessionGone { path } => {
-                    let id = self
-                        .agents
-                        .agents()
-                        .iter()
-                        .find(|a| a.jsonl_path == path)
-                        .map(|a| a.id);
-                    if let Some(id) = id {
-                        self.office.remove_character(id);
-                        self.agents.remove_agent(id);
-                        self.timers.cancel_all(id);
-                        if self.selected == Some(id) {
-                            self.selected = None;
-                        }
-                    }
-                }
+                ScanEvent::SessionGone { path } => self.remove_session(&path),
             }
         }
 
@@ -829,5 +857,102 @@ fn palette_color(palette: u8) -> (u8, u8, u8) {
         4 => (230, 140, 30),  // orange
         5 => (30, 180, 180),  // teal
         _ => (180, 180, 180),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    use crate::layout::persistence::default_layout;
+
+    impl App {
+        /// App watching `dir`, with no config directory so tests never touch `$HOME`.
+        fn for_test(dir: PathBuf) -> Self {
+            Self {
+                office: OfficeState::from_layout(default_layout()),
+                agents: AgentRegistry::new(),
+                scanner: DirectoryScanner::new(vec![dir]).unwrap(),
+                timers: TimerManager::new(),
+                warehouse: Warehouse::default(),
+                config_dir: None,
+                selected: None,
+                running: true,
+                render_origin: (0, 0),
+            }
+        }
+    }
+
+    fn write_transcript(project: &std::path::Path, name: &str) -> PathBuf {
+        let path = project.join(format!("{name}.jsonl"));
+        std::fs::write(&path, "{\"type\":\"user\"}\n").unwrap();
+        path
+    }
+
+    fn tick_until(app: &mut App, limit: Duration, done: impl Fn(&App) -> bool) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < limit {
+            app.on_tick(0.016);
+            if done(app) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    #[test]
+    fn refused_transcript_is_adopted_on_a_later_write_once_a_slot_frees() {
+        let root = tempfile::tempdir().unwrap();
+        // The watcher reports canonical paths; temp dirs may be symlinked.
+        let root_path = root.path().canonicalize().unwrap();
+        let project = root_path.join("-Users-u-proj");
+        std::fs::create_dir(&project).unwrap();
+        let mut app = App::for_test(root_path);
+        let mut first = Vec::new();
+        for i in 0..MAX_AGENTS {
+            let path = write_transcript(&project, &format!("s{i}"));
+            assert!(app.adopt_session(path.clone(), "-Users-u-proj".into(), format!("s{i}")));
+            first.push(path);
+        }
+        let ninth = write_transcript(&project, "ninth");
+        // The scanner sees the ninth transcript while the limit is reached.
+        tick_until(&mut app, Duration::from_secs(2), |_| false);
+        assert!(!app.agents.has_path(&ninth));
+
+        app.remove_session(&first[0]);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&ninth)
+            .unwrap()
+            .write_all(b"{\"type\":\"user\"}\n")
+            .unwrap();
+        let adopted = tick_until(&mut app, Duration::from_secs(5), |a| {
+            a.agents.has_path(&ninth)
+        });
+        assert!(adopted, "refused transcript was never retried");
+    }
+
+    #[test]
+    fn dormant_agents_do_not_count_toward_the_limit() {
+        let root = tempfile::tempdir().unwrap();
+        // The watcher reports canonical paths; temp dirs may be symlinked.
+        let root_path = root.path().canonicalize().unwrap();
+        let project = root_path.join("-Users-u-proj");
+        std::fs::create_dir(&project).unwrap();
+        let mut app = App::for_test(root_path);
+        for i in 0..MAX_AGENTS {
+            let path = write_transcript(&project, &format!("s{i}"));
+            assert!(app.adopt_session(path, "-Users-u-proj".into(), format!("s{i}")));
+        }
+        let ids: Vec<usize> = app.agents.agents().iter().map(|a| a.id).collect();
+        for id in ids {
+            app.agents.get_mut(id).unwrap().status = AgentStatus::Dormant;
+        }
+        let extra = write_transcript(&project, "extra");
+        assert!(app.adopt_session(extra, "-Users-u-proj".into(), "extra".into()));
     }
 }

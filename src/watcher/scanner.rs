@@ -217,6 +217,11 @@ impl DirectoryScanner {
         events
     }
 
+    /// Forget a path so its next write is reported as a new session again.
+    pub fn forget(&mut self, path: &Path) {
+        self.known_files.remove(path);
+    }
+
     /// Mark a session path as dismissed with a cooldown period.
     pub fn dismiss(&mut self, path: &Path) {
         self.known_files.remove(path);
@@ -343,6 +348,34 @@ mod tests {
         assert_eq!(project_hash("/home/user/project"), "-home-user-project");
         assert_eq!(project_hash("C:\\Users\\project"), "C--Users-project");
         assert_eq!(project_hash("simple"), "simple");
+    }
+
+    #[test]
+    fn forget_reports_the_next_write_as_a_new_session() {
+        let root = tempfile::tempdir().unwrap();
+        let mut scanner = DirectoryScanner::new(vec![root.path().to_owned()]).unwrap();
+        let project = root.path().join("p");
+        std::fs::create_dir(&project).unwrap();
+        let path = project.join("s.jsonl");
+        std::fs::write(&path, "{}\n").unwrap();
+        let next_session = |scanner: &mut DirectoryScanner| -> Option<PathBuf> {
+            for _ in 0..50 {
+                std::thread::sleep(Duration::from_millis(100));
+                let found = scanner.poll().into_iter().find_map(|e| match e {
+                    ScanEvent::NewSession { path, .. } => Some(path),
+                    _ => None,
+                });
+                if found.is_some() {
+                    return found;
+                }
+            }
+            None
+        };
+        // Use the path as the watcher reports it; temp dirs may be symlinked.
+        let reported = next_session(&mut scanner).expect("first write is reported");
+        scanner.forget(&reported);
+        std::fs::write(&path, "{}\n{}\n").unwrap();
+        assert!(next_session(&mut scanner).is_some());
     }
 
     #[test]
