@@ -201,7 +201,7 @@ mod watcher_engine {
         state.add_character(agent_id, palette, hue_shift);
 
         // Parse turn-end system message
-        let line = r#"{"type":"system","message":{"subtype":"turn_duration"}}"#;
+        let line = r#"{"type":"system","subtype":"turn_duration","durationMs":1523}"#;
         let agent = registry.get(agent_id).unwrap();
         let record = parser::parse_line(line).unwrap();
         let events = parser::extract_events(&record, agent);
@@ -330,7 +330,7 @@ mod watcher_engine {
         ));
 
         // Turn end
-        let line3 = r#"{"type":"system","message":{"subtype":"turn_duration"}}"#;
+        let line3 = r#"{"type":"system","subtype":"turn_duration","durationMs":1523}"#;
         let record3 = parser::parse_line(line3).unwrap();
         let events3 = parser::extract_events(&record3, agent);
         assert!(matches!(&events3[0], AgentEvent::TurnEnd));

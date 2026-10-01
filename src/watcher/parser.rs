@@ -174,11 +174,8 @@ pub fn extract_tool_result(value: &Value) -> Vec<String> {
 
 /// Returns true if the record is a system message with subtype `turn_duration`.
 pub fn is_turn_end(value: &Value) -> bool {
-    value
-        .get("message")
-        .and_then(|m| m.get("subtype"))
-        .and_then(Value::as_str)
-        == Some("turn_duration")
+    value.get("type").and_then(Value::as_str) == Some("system")
+        && value.get("subtype").and_then(Value::as_str) == Some("turn_duration")
 }
 
 /// Returns true if the tool name is non-exempt (triggers permission timer).
@@ -272,13 +269,21 @@ mod tests {
     }
 
     #[test]
-    fn turn_end_detection() {
-        let val: Value =
-            serde_json::from_str(r#"{"message":{"subtype":"turn_duration"}}"#).unwrap();
-        assert!(is_turn_end(&val));
+    fn turn_end_detection_reads_the_top_level_subtype() {
+        // Real record shape: `subtype` is top-level, `message` is absent.
+        let real: Value = serde_json::from_str(
+            r#"{"type":"system","subtype":"turn_duration","durationMs":1523,"messageCount":4,"cwd":"/work/app","gitBranch":"main"}"#,
+        )
+        .unwrap();
+        assert!(is_turn_end(&real));
 
-        let val2: Value = serde_json::from_str(r#"{"message":{"subtype":"other"}}"#).unwrap();
-        assert!(!is_turn_end(&val2));
+        let other: Value =
+            serde_json::from_str(r#"{"type":"system","subtype":"stop_hook_summary"}"#).unwrap();
+        assert!(!is_turn_end(&other));
+
+        let nested: Value =
+            serde_json::from_str(r#"{"message":{"subtype":"turn_duration"}}"#).unwrap();
+        assert!(!is_turn_end(&nested));
     }
 
     #[test]
