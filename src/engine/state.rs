@@ -95,7 +95,7 @@ impl OfficeState {
         }
     }
 
-    /// Tick all characters, matrix effects, and furniture animation.
+    /// Tick all characters and furniture animation.
     pub fn update(&mut self, dt: f64) {
         let dt_f32 = dt as f32;
 

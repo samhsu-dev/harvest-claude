@@ -64,7 +64,6 @@ pub const MAX_AGENTS: usize = 8;
 pub const PALETTE_COUNT: u8 = 6;
 pub const HUE_SHIFT_MIN_DEG: i16 = 45;
 pub const HUE_SHIFT_RANGE_DEG: i16 = 270;
-pub const MATRIX_DURATION_SECS: f32 = 0.3;
 pub const WAITING_BUBBLE_SECS: f32 = 2.0;
 pub const BUBBLE_FADE_SECS: f32 = 0.5;
 pub const FURNITURE_ANIM_INTERVAL_SECS: f32 = 0.2;

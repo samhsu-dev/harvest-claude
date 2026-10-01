@@ -7,7 +7,6 @@ use crate::constants::{
     WALK_FRAME_MS, WALK_SPEED, WANDER_MOVES_MAX, WANDER_MOVES_MIN, WANDER_PAUSE_MAX,
     WANDER_PAUSE_MIN,
 };
-use crate::engine::matrix::MatrixEffect;
 use crate::engine::pathfind;
 use crate::engine::seat::Seat;
 use crate::types::{
@@ -88,8 +87,6 @@ pub struct Character {
     pub tool_name: Option<String>,
     /// Active speech bubble, if any.
     pub bubble: Option<BubbleState>,
-    /// Active matrix spawn/despawn effect, if any.
-    pub matrix_effect: Option<MatrixEffect>,
     /// Companion animals (from background sub-agents).
     pub companions: Vec<Companion>,
     /// Animation override from seat furniture context (Fish, Farm, Harvest).
@@ -128,7 +125,6 @@ impl Character {
             wander_limit: rng.random_range(WANDER_MOVES_MIN..=WANDER_MOVES_MAX),
             tool_name: None,
             bubble: None,
-            matrix_effect: None,
             companions: Vec::new(),
             work_anim: None,
             pending_dormant: false,
@@ -148,13 +144,6 @@ impl Character {
             if bubble.timer <= 0.0 {
                 self.bubble = None;
             }
-        }
-
-        // Update matrix effect
-        if let Some(ref mut fx) = self.matrix_effect
-            && fx.update(dt_f32)
-        {
-            self.matrix_effect = None;
         }
 
         // Update companion animations
